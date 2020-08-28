@@ -5,7 +5,7 @@ import MinkowskiEngine.MinkowskiFunctional as MEF
 from model.common import get_norm
 
 from model.residual_block import get_block
-
+import torch.nn.functional as F
 
 class ResUNet2(ME.MinkowskiNetwork):
   NORM_TYPE = None
@@ -138,6 +138,8 @@ class ResUNet2(ME.MinkowskiNetwork):
         dilation=1,
         has_bias=True,
         dimension=D)
+################################################################
+    self.fc1 = torch.nn.Linear(32, 256)
 
   def forward(self, x):
     out_s1 = self.conv1(x)
@@ -183,14 +185,20 @@ class ResUNet2(ME.MinkowskiNetwork):
     out = self.conv1_tr(out)
     out = MEF.relu(out)
     out = self.final(out)
+################################################################
+    out = torch.max(out.F, 0)[0]
+    out = F.relu(self.fc1(out))
+#    out = self.fc1(out)
+    return out.unsqueeze(0)
 
-    if self.normalize_feature:
-      return ME.SparseTensor(
-          out.F / torch.norm(out.F, p=2, dim=1, keepdim=True),
-          coords_key=out.coords_key,
-          coords_manager=out.coords_man)
-    else:
-      return out
+
+#    if self.normalize_feature:
+#      return ME.SparseTensor(
+#          out.F / torch.norm(out.F, p=2, dim=1, keepdim=True),
+#          coords_key=out.coords_key,
+#          coords_manager=out.coords_man)
+#    else:
+#      return out
 
 
 class ResUNetBN2(ResUNet2):

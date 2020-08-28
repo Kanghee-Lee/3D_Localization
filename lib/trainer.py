@@ -234,12 +234,12 @@ class ContrastiveLossTrainer(AlignmentTrainer):
         # pairs consist of (xyz1 index, xyz0 index)
         sinput0 = ME.SparseTensor(
             input_dict['sinput0_F'], coords=input_dict['sinput0_C']).to(self.device)
-        F0 = self.model(sinput0).F
-
+#        F0 = self.model(sinput0).F
+        F0 = self.model(sinput0)
         sinput1 = ME.SparseTensor(
             input_dict['sinput1_F'], coords=input_dict['sinput1_C']).to(self.device)
-        F1 = self.model(sinput1).F
-
+#        F1 = self.model(sinput1).F
+        F1 = self.model(sinput1)
         N0, N1 = len(sinput0), len(sinput1)
 
         pos_pairs = input_dict['correspondences']
@@ -316,11 +316,12 @@ class ContrastiveLossTrainer(AlignmentTrainer):
       feat_timer.tic()
       sinput0 = ME.SparseTensor(
           input_dict['sinput0_F'], coords=input_dict['sinput0_C']).to(self.device)
-      F0 = self.model(sinput0).F
-
+#      F0 = self.model(sinput0).F
+      F0 = self.model(sinput0)
       sinput1 = ME.SparseTensor(
           input_dict['sinput1_F'], coords=input_dict['sinput1_C']).to(self.device)
-      F1 = self.model(sinput1).F
+#      F1 = self.model(sinput1).F
+      F1 = self.model(sinput1)
       feat_timer.toc()
 
       matching_timer.tic()
@@ -469,12 +470,14 @@ class HardestContrastiveLossTrainer(ContrastiveLossTrainer):
 
         sinput0 = ME.SparseTensor(
             input_dict['sinput0_F'], coords=input_dict['sinput0_C']).to(self.device)
-        F0 = self.model(sinput0).F
+#        F0 = self.model(sinput0).F
+        F0 = self.model(sinput0)
 
         sinput1 = ME.SparseTensor(
             input_dict['sinput1_F'], coords=input_dict['sinput1_C']).to(self.device)
 
-        F1 = self.model(sinput1).F
+#        F1 = self.model(sinput1).F
+        F1 = self.model(sinput1)
 
         pos_pairs = input_dict['correspondences']
         pos_loss, neg_loss = self.contrastive_hardest_negative_loss(
@@ -598,11 +601,13 @@ class TripletLossTrainer(ContrastiveLossTrainer):
         # pairs consist of (xyz1 index, xyz0 index)
         sinput0 = ME.SparseTensor(
             input_dict['sinput0_F'], coords=input_dict['sinput0_C']).to(self.device)
-        F0 = self.model(sinput0).F
+#        F0 = self.model(sinput0).F
+        F0 = self.model(sinput0)
 
         sinput1 = ME.SparseTensor(
             input_dict['sinput1_F'], coords=input_dict['sinput1_C']).to(self.device)
-        F1 = self.model(sinput1).F
+#        F1 = self.model(sinput1).F
+        F1 = self.model(sinput1)
 
         pos_pairs = input_dict['correspondences']
         loss, pos_dist, neg_dist = self.triplet_loss(

@@ -16,7 +16,7 @@ from model import load_model
 from util.file import ensure_dir, get_folder_list, get_file_list
 from util.trajectory import read_trajectory, write_trajectory
 from util.pointcloud import make_open3d_point_cloud, evaluate_feature_3dmatch
-from scripts.benchmark_util import do_single_pair_matching, gen_matching_pair, gather_results
+from scripts.benchmark_util import do_single_pair_matching, gen_matching_pair, gather_results, global_desc_matching
 
 import torch
 
@@ -81,7 +81,7 @@ def extract_features_batch(model, config, source_path, target_path, voxel_size, 
   f.close()
 
 
-def registration(feature_path, voxel_size):
+def registration(feature_path, voxel_size, pooling_arg):
   """
   Gather .log files produced in --target folder and run this Matlab script
   https://github.com/andyzeng/3dmatch-toolbox#geometric-registration-benchmark
@@ -98,10 +98,16 @@ def registration(feature_path, voxel_size):
     matching_pairs = gen_matching_pair(pts_num)
     results = []
     for m in matching_pairs:
-      results.append(do_single_pair_matching(feature_path, set_name, m, voxel_size))
+      if pooling_arg =='None' :
+        results.append(do_single_pair_matching(feature_path, set_name, m, voxel_size))
+      else :
+        results.append(global_desc_matching(feature_path, set_name, m, voxel_size, pooling_arg))
+      print("results :", results)
     traj = gather_results(results)
+    print("traj :", traj)
     logging.info(f"Writing the trajectory to {feature_path}/{set_name}.log")
-    write_trajectory(traj, "%s.log" % (os.path.join(feature_path, set_name)))
+    print('~~~~~~~~~~~~~~~~write trajectory~~~~~~~~~~~~~~~~')
+    write_trajectory(traj, "%s.log" % (os.path.join(os.path.join(feature_path, 'global'), set_name)))
 
 
 def do_single_pair_evaluation(feature_path,
@@ -228,6 +234,8 @@ if __name__ == '__main__':
       type=int,
       default=5000,
       help='Number of random keypoints for each scene')
+  parser.add_argument('--max_pooling', action='store_true')
+  parser.add_argument('--avg_pooling', action='store_true')
 
   args = parser.parse_args()
 
@@ -266,7 +274,14 @@ if __name__ == '__main__':
       feature_evaluation(args.source, args.target, args.voxel_size,
                          args.num_rand_keypoints)
 
+####################################################################################
+
   if args.evaluate_registration:
     assert (args.target is not None)
     with torch.no_grad():
-      registration(args.target, args.voxel_size)
+      if args.max_pooling : 
+        registration(args.target, args.voxel_size, 'max')
+      elif args.avg_pooling : 
+        registration(args.target, args.voxel_size, 'avg')
+      else :
+        registration(args.target, args.voxel_size, 'None')

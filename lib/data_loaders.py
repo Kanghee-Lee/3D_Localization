@@ -166,7 +166,9 @@ class ThreeDMatchTestDataset(PairDataset):
         j = ctraj.metadata[1]
         T_gt = ctraj.pose
         self.files.append((sname, i, j, T_gt))
-
+        print('#'*20)
+        print(sname, i, j, T_gt)
+        print('#'*20)
     self.return_ply_names = return_ply_names
 
   def __getitem__(self, pair_index):
