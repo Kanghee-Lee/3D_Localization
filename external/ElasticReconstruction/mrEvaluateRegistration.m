@@ -25,13 +25,14 @@ function [ recall, precision ] = mrEvaluateRegistration( result, gt, gt_info, er
             if idx == 0
                 false_pos = false_pos + 1;
             else
-                p = mrComputeTransformationError( gt( idx ).trans ^ -1 * result( i ).trans, gt_info( idx ).mat );
-                error_dis = [ error_dis, p ];
-                if ( p <= err2 )
-                    good = good + 1;
-                else
-                    bad = bad + 1;
-                end
+                 good = good + 1;
+%                  p = mrComputeTransformationError( gt( idx ).trans ^ -1 * result( i ).trans, gt_info( idx ).mat );
+%                  error_dis = [ error_dis, p ];
+%                  if ( p <= err2 )
+%                      good = good + 1;
+%                  else
+%                      bad = bad + 1;
+                 end
             end
         end
     end

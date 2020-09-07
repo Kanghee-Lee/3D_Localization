@@ -4,7 +4,7 @@
 % http://redwood-data.org/indoor/regbasic.html
 % https://github.com/qianyizh/ElasticReconstruction/tree/master/Matlab_Toolbox
 
-descriptorName = '3dmatch'; % 3dmatch, spin, fpfh
+descriptorName = 'FCGF'; % 3dmatch, spin, fpfh
 
 % Locations of evaluation files
 dataPath = '../threedmatch_test';

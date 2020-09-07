@@ -11,7 +11,7 @@ from lib.data_loaders import make_data_loader
 from config import get_config
 
 from lib.trainer import ContrastiveLossTrainer, HardestContrastiveLossTrainer, \
-    TripletLossTrainer, HardestTripletLossTrainer
+    TripletLossTrainer, HardestTripletLossTrainer, ContrastiveLossTrainer_MLP
 
 ch = logging.StreamHandler(sys.stdout)
 logging.getLogger().setLevel(logging.INFO)
@@ -33,6 +33,8 @@ def get_trainer(trainer):
     return TripletLossTrainer
   elif trainer == 'HardestTripletLossTrainer':
     return HardestTripletLossTrainer
+  elif trainer == 'ContrastiveLossTrainer_MLP':
+    return ContrastiveLossTrainer_MLP
   else:
     raise ValueError(f'Trainer {trainer} not found')
 
@@ -54,13 +56,23 @@ def main(config, resume=False):
     val_loader = None
 
   Trainer = get_trainer(config.trainer)
-  trainer = Trainer(
-      config=config,
-      data_loader=train_loader,
-      val_data_loader=val_loader,
-  )
-
+  if config.freeze :
+    trainer = Trainer(
+        config=config,
+        data_loader=train_loader,
+        val_data_loader=val_loader,
+        freeze=True)
+  else :
+    trainer = Trainer(
+        config=config,
+        data_loader=train_loader,
+        val_data_loader=val_loader,
+        freeze=False)
   trainer.train()
+  #
+  # if config.freeze :
+  #     trainer.train(freeze=True)
+  # trainer.train(freeze=False)
 
 
 if __name__ == "__main__":

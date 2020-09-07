@@ -12,7 +12,8 @@ class ResUNet2(ME.MinkowskiNetwork):
   BLOCK_NORM_TYPE = 'BN'
   CHANNELS = [None, 32, 64, 128, 256]
   TR_CHANNELS = [None, 32, 64, 64, 128]
-
+  # ver2
+  FC = None
   # To use the model, must call initialize_coords before forward pass.
   # Once data is processed, call clear to reset the model before calling initialize_coords
   def __init__(self,
@@ -27,6 +28,8 @@ class ResUNet2(ME.MinkowskiNetwork):
     BLOCK_NORM_TYPE = self.BLOCK_NORM_TYPE
     CHANNELS = self.CHANNELS
     TR_CHANNELS = self.TR_CHANNELS
+    # ver2
+    FC = self.FC
     self.normalize_feature = normalize_feature
     self.conv1 = ME.MinkowskiConvolution(
         in_channels=in_channels,
@@ -139,8 +142,10 @@ class ResUNet2(ME.MinkowskiNetwork):
         has_bias=True,
         dimension=D)
 ################################################################
-    self.fc1 = torch.nn.Linear(32, 256)
-
+    # ver2
+    if FC :
+      self.conv_1d = torch.nn.Conv1d(32, FC[0], 1)
+      self.bn_1 = torch.nn.BatchNorm1d(FC[0])
   def forward(self, x):
     out_s1 = self.conv1(x)
     out_s1 = self.norm1(out_s1)
@@ -185,21 +190,36 @@ class ResUNet2(ME.MinkowskiNetwork):
     out = self.conv1_tr(out)
     out = MEF.relu(out)
     out = self.final(out)
+    if self.normalize_feature:
+      out = ME.SparseTensor(
+          out.F / torch.norm(out.F, p=2, dim=1, keepdim=True),
+          coords_key=out.coords_key,
+          coords_manager=out.coords_man)
+
 ################################################################
-    out = torch.max(out.F, 0)[0]
-    out = F.relu(self.fc1(out))
-#    out = self.fc1(out)
-    return out.unsqueeze(0)
+    # ver2
+    if self.FC :
+      out = out.F.unsqueeze(0)
+      out = out.view(1, out.shape[-1], -1)
+      out = F.relu(self.bn_1(self.conv_1d(out)))
+      out = out.view(1, out.shape[-1], -1)
+      out = torch.max(out, 1)[0]
+      out = F.normalize(out, p=2)
+      # print('resunet.py - output shape : ', out.shape)
 
+      return out
+    else :
+      return out.F
 
-#    if self.normalize_feature:
-#      return ME.SparseTensor(
-#          out.F / torch.norm(out.F, p=2, dim=1, keepdim=True),
-#          coords_key=out.coords_key,
-#          coords_manager=out.coords_man)
-#    else:
-#      return out
-
+    # if self.FC :
+    #   out = out.F.unsqueeze(0)
+    #   out = out.view(1, out.shape[-1], -1)
+    #   out = F.relu(self.bn_1(self.conv_1d(out)))
+    #   # out = F.relu(self.conv_1d(out))
+    #   out = out.view(1, out.shape[-1], -1)
+    #   return out
+    # else :
+    #   return out.F
 
 class ResUNetBN2(ResUNet2):
   NORM_TYPE = 'BN'
@@ -252,3 +272,16 @@ class ResUNetIN2D(ResUNetBN2D):
 class ResUNetIN2E(ResUNetBN2E):
   NORM_TYPE = 'BN'
   BLOCK_NORM_TYPE = 'IN'
+
+############################################################
+# ver2
+class ResUNetMLP2(ResUNetBN2C):
+  FC = [128]
+
+class ResUNetMLP2B(ResUNetBN2C):
+  FC = [256]
+
+class ResUNetMLP2C(ResUNetBN2C):
+  FC = [512]
+
+

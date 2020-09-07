@@ -22,10 +22,17 @@ import open3d as o3d
 kitti_cache = {}
 kitti_icp_cache = {}
 
-
+# 수정
 def collate_pair_fn(list_data):
-  xyz0, xyz1, coords0, coords1, feats0, feats1, matching_inds, trans = list(
+  xyz0, xyz1, coords0, coords1, feats0, feats1, matching_inds, trans, pcd_match = list(
       zip(*list_data))
+
+  # print('data_loader.py - collate_pair_fn')
+  # print('xyz0 : ', xyz0)
+  # print('coords0 : ', coords0)
+  # print('feats0 : ', feats0)
+  # print('matching_inds : ', matching_inds)
+  # print('trans : ', trans)
   xyz_batch0, xyz_batch1 = [], []
   matching_inds_batch, trans_batch, len_batch = [], [], []
 
@@ -40,6 +47,8 @@ def collate_pair_fn(list_data):
     else:
       raise ValueError(f'Can not convert to torch tensor, {x}')
 
+  # print('data_loaders.py - coords0', type(coords0))
+  # print('data_loaders.py - coords0', coords0)
   for batch_id, _ in enumerate(coords0):
     N0 = coords0[batch_id].shape[0]
     N1 = coords1[batch_id].shape[0]
@@ -48,24 +57,26 @@ def collate_pair_fn(list_data):
     xyz_batch1.append(to_tensor(xyz1[batch_id]))
 
     trans_batch.append(to_tensor(trans[batch_id]))
-
-    matching_inds_batch.append(
-        torch.from_numpy(np.array(matching_inds[batch_id]) + curr_start_inds))
-    len_batch.append([N0, N1])
-
+    # print('data_loaders.py - matching_inds[batch_id]', batch_id)
+    # print(matching_inds[batch_id])
+    # print('5'*20)
+    # matching_inds_batch.append(
+    #     torch.from_numpy(np.array(matching_inds[batch_id]) + curr_start_inds))
+    # len_batch.append([N0, N1])
+    matching_inds_batch=[]
     # Move the head
     curr_start_inds[0, 0] += N0
     curr_start_inds[0, 1] += N1
 
   coords_batch0, feats_batch0 = ME.utils.sparse_collate(coords0, feats0)
   coords_batch1, feats_batch1 = ME.utils.sparse_collate(coords1, feats1)
-
+  # print('data_loaders.py - coords_batch0', coords_batch0.shape)
   # Concatenate all lists
   xyz_batch0 = torch.cat(xyz_batch0, 0).float()
   xyz_batch1 = torch.cat(xyz_batch1, 0).float()
   trans_batch = torch.cat(trans_batch, 0).float()
-  matching_inds_batch = torch.cat(matching_inds_batch, 0).int()
-
+  # matching_inds_batch = torch.cat(matching_inds_batch, 0).int()
+  # print('data_loaders.py - pcd_match', pcd_match)
   return {
       'pcd0': xyz_batch0,
       'pcd1': xyz_batch1,
@@ -75,7 +86,8 @@ def collate_pair_fn(list_data):
       'sinput1_F': feats_batch1.float(),
       'correspondences': matching_inds_batch,
       'T_gt': trans_batch,
-      'len_batch': len_batch
+      'len_batch': len_batch,
+      'pcd_match' : int(pcd_match[0])
   }
 
 
@@ -104,6 +116,7 @@ class PairDataset(torch.utils.data.Dataset):
                config=None):
     self.phase = phase
     self.files = []
+    self.pos_files = []
     self.data_objects = []
     self.transform = transform
     self.voxel_size = config.voxel_size
@@ -166,9 +179,9 @@ class ThreeDMatchTestDataset(PairDataset):
         j = ctraj.metadata[1]
         T_gt = ctraj.pose
         self.files.append((sname, i, j, T_gt))
-        print('#'*20)
-        print(sname, i, j, T_gt)
-        print('#'*20)
+        # print('#'*20)
+        # print(sname, i, j, T_gt)
+        # print('#'*20)
     self.return_ply_names = return_ply_names
 
   def __getitem__(self, pair_index):
@@ -203,22 +216,53 @@ class IndoorPairDataset(PairDataset):
     logging.info(f"Loading the subset {phase} from {root}")
 
     subset_names = open(self.DATA_FILES[phase]).read().split()
+    # print('data_loaders.py - subset_names : ', subset_names)
+    files_dict={}
     for name in subset_names:
-      fname = name + "*%.2f.txt" % self.OVERLAP_RATIO
+      fname = name + "*.npz"
+      pos_fname = name + "*%.2f.txt" % self.OVERLAP_RATIO
       fnames_txt = glob.glob(root + "/" + fname)
+      pos_fnames_txt = glob.glob(root + "/" + pos_fname)
+      # print('data_loaders.py - fnames_txt : ', fnames_txt)
       assert len(fnames_txt) > 0, f"Make sure that the path {root} has data {fname}"
       for fname_txt in fnames_txt:
-        with open(fname_txt) as f:
-          content = f.readlines()
-        fnames = [x.strip().split() for x in content]
-        for fname in fnames:
-          self.files.append([fname[0], fname[1]])
+        fn = fname_txt.split(root+'/')[1]
+        fn_key = fn.rsplit('_', 1)[0]
+        if fn_key not in files_dict.keys() :
+          files_dict[fn_key] = [fn]
+        else :
+          files_dict[fn_key].append(fn)
 
+      for pos_fname_txt in pos_fnames_txt:
+        with open(pos_fname_txt) as f:
+          content = f.readlines()
+        pos_fnames = [x.strip().split() for x in content]
+        for pos_fname in pos_fnames:
+          self.pos_files.append([pos_fname[0], pos_fname[1]])
+
+    files_list=list(files_dict.values())
+    for files in files_list :
+      for i in range(len(files)) :
+        for j in range(i + 1, len(files)) :
+          self.files.append([files[i], files[j]])
+    # print('data_loaders.py - files : ', self.files)
+
+  # 수정
   def __getitem__(self, idx):
     file0 = os.path.join(self.root, self.files[idx][0])
+    # print('data_loaders.py - file0 : ', file0)
     file1 = os.path.join(self.root, self.files[idx][1])
+    # print('data_loaders.py - files : ', len(self.files))
+    # print('data_loaders.py - pos_files : ', len(self.pos_files))
+    # print('data_loaders.py - files[idx][0], [1] : ', self.files[idx][0], self.files[idx][1])
+    if [self.files[idx][0], self.files[idx][1]] in self.pos_files :
+      pcd_match=True
+    else :
+      pcd_match=False
     data0 = np.load(file0)
     data1 = np.load(file1)
+    # print('<->'*30)
+    # print('data_loaders.py - data0 : ', data0)
     xyz0 = data0["pcd"]
     xyz1 = data1["pcd"]
     color0 = data0["color"]
@@ -281,7 +325,7 @@ class IndoorPairDataset(PairDataset):
       coords0, feats0 = self.transform(coords0, feats0)
       coords1, feats1 = self.transform(coords1, feats1)
 
-    return (xyz0, xyz1, coords0, coords1, feats0, feats1, matches, trans)
+    return (xyz0, xyz1, coords0, coords1, feats0, feats1, matches, trans, pcd_match)
 
 
 class KITTIPairDataset(PairDataset):
