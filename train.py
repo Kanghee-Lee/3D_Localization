@@ -76,6 +76,17 @@ def main(config, resume=False):
 
 
 if __name__ == "__main__":
+  print('1' * 50)
+  print(torch.cuda.device_count())
+    # 1
+  print(torch.cuda.get_device_name(0))
+    # GeForce RTX 2080 Ti
+  print(torch.cuda.is_available())
+  print('1'*50)
+
+
+
+
   logger = logging.getLogger()
   config = get_config()
 

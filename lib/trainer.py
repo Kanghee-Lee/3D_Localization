@@ -534,28 +534,29 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
 
 
         if input_dict['pcd_match'] :
-          pos_loss = (F0 - F1).pow(2).sum(1)
-          pos_loss_mean = pos_loss.mean() / iter_size
+          pos_loss_mean = ((F0 - F1).pow(2).sum(1)).mean() / iter_size
+
           neg_loss_mean = 0
           loss = pos_loss_mean
-          print('------------------Positive------------------')
-          print('trainer.py')
-          print('F0', F0)
-          print('F1', F0)
-          print('pos_loss', loss)
+          pos_loss_mean = pos_loss_mean.item()
+          # print('------------------Positive------------------')
+          # print('trainer.py')
+          # print('F0', F0)
+          # print('F1', F0)
+          # print('pos_loss', loss.item())
 
         else :
           pos_loss_mean = 0
-          neg_loss = F.relu(self.neg_thresh -
-                          ((F0 - F1).pow(2).sum(1) + 1e-4).sqrt()).pow(2)
-          neg_loss_mean = neg_loss.mean() / iter_size
-          loss = neg_loss_mean
+          neg_loss_mean = (F.relu(self.neg_thresh -
+                          ((F0 - F1).pow(2).sum(1) + 1e-4).sqrt()).pow(2)).mean() / iter_size
 
-          print('------------------Negative------------------')
-          print('trainer.py')
-          print('F0', F0)
-          print('F1', F0)
-          print('neg_loss', loss)
+          loss = neg_loss_mean
+          neg_loss_mean = neg_loss_mean.item()
+          # print('------------------Negative------------------')
+          # print('trainer.py')
+          # print('F0', F0)
+          # print('F1', F0)
+          # print('neg_loss', loss.item())
         # # Positive loss
         # pos_loss = (F0 - F1).pow(2).sum(1)
         #
@@ -573,7 +574,9 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
         # batch_loss += loss.item()
         # batch_pos_loss += pos_loss_mean.item()
         # batch_neg_loss += neg_loss_mean.item()
-
+        batch_loss += loss.item()
+        batch_pos_loss += pos_loss_mean
+        batch_neg_loss += neg_loss_mean
       self.optimizer.step()
 
       torch.cuda.empty_cache()
@@ -588,12 +591,12 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
         # self.writer.add_scalar('train/loss', batch_loss, start_iter + curr_iter)
         # self.writer.add_scalar('train/pos_loss', batch_pos_loss, start_iter + curr_iter)
         # self.writer.add_scalar('train/neg_loss', batch_neg_loss, start_iter + curr_iter)
-        self.writer.add_scalar('train/loss', loss, start_iter + curr_iter)
+        self.writer.add_scalar('train/loss', batch_loss, start_iter + curr_iter)
         logging.info(
             "Train Epoch: {} [{}/{}], Current Loss: {:.3e} Pos: {:.3f} Neg: {:.3f}"
             .format(epoch, curr_iter,
                     len(self.data_loader) //
-                    iter_size, loss, pos_loss_mean, neg_loss_mean) +
+                    iter_size, batch_loss, batch_pos_loss, batch_neg_loss) +
             "\tData time: {:.4f}, Train time: {:.4f}, Iter time: {:.4f}".format(
                 data_meter.avg, total_timer.avg - data_meter.avg, total_timer.avg))
         data_meter.reset()
@@ -651,13 +654,13 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
 
       if input_dict['pcd_match']:
         pos_loss = (F0 - F1).pow(2).sum(1)
-        loss += pos_loss
+        loss += pos_loss.item()
 
       else:
         pos_loss_mean = 0
         neg_loss = F.relu(self.neg_thresh -
                           ((F0 - F1).pow(2).sum(1) + 1e-4).sqrt()).pow(2)
-        loss += neg_loss
+        loss += neg_loss.item()
 
 
 
@@ -667,15 +670,15 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
       if batch_idx % 100 == 0 and batch_idx > 0:
         logging.info(' '.join([
             f"Validation iter {num_data} / {tot_num_data} : Data Loading Time: {data_timer.avg:.3f},",
-            f"Loss: {(loss/num_data).tolist()[0]:.3f},"
+            f"Loss: {(loss/num_data):.3f},"
         ]))
         data_timer.reset()
 
     logging.info(' '.join([
-        f"Final Loss: {(loss/num_data).tolist()[0]:.3f},"
+        f"Final Loss: {(loss/num_data):.3f},"
     ]))
     return {
-        "final_loss": (loss/num_data).tolist()[0],
+        "final_loss": (loss/num_data),
         "rre": rre_meter.avg,
         "rte": rte_meter.avg,
         'feat_match_ratio': feat_match_ratio.avg,
