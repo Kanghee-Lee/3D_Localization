@@ -98,7 +98,9 @@ def registration(feature_path, voxel_size):
     matching_pairs = gen_matching_pair(pts_num)
     results = []
     for m in matching_pairs:
-      results.append(do_single_pair_matching(feature_path, set_name, m, voxel_size))
+      tmp = do_single_pair_matching(feature_path, set_name, m, voxel_size)
+      print(feature_path, set_name, tmp)
+      results.append(tmp)
     traj = gather_results(results)
     logging.info(f"Writing the trajectory to {feature_path}/{set_name}.log")
     write_trajectory(traj, "%s.log" % (os.path.join(feature_path, set_name)))
@@ -172,10 +174,6 @@ def feature_evaluation(source_path, feature_path, voxel_size, num_rand_keypoints
   recall = []
   for s in sets:
     set_name = s[0]
-    print('*'*20)
-    print(source_path)
-    print(set_name)
-    print('*'*20)
     traj = read_trajectory(os.path.join(source_path, set_name + "-evaluation/gt.log"))
     assert len(traj) > 0, "Empty trajectory file"
     results = []

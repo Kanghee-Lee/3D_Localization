@@ -8,7 +8,6 @@ def _hash(arr, M):
     N, D = arr.shape
   else:
     N, D = len(arr[0]), len(arr)
-
   hash_vec = np.zeros(N, dtype=np.int64)
   for d in range(D):
     if isinstance(arr, np.ndarray):

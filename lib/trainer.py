@@ -118,7 +118,7 @@ class AlignmentTrainer:
     """
     Full training logic
     """
-    # Baseline random feature performance
+    #Baseline random feature performance
     if self.test_valid:
       with torch.no_grad():
         val_dict = self._valid_epoch()
@@ -465,8 +465,9 @@ class HardestContrastiveLossTrainer(ContrastiveLossTrainer):
       for iter_idx in range(iter_size):
         data_timer.tic()
         input_dict = data_loader_iter.next()
+        
         data_time += data_timer.toc(average=False)
-
+    
         sinput0 = ME.SparseTensor(
             input_dict['sinput0_F'], coords=input_dict['sinput0_C']).to(self.device)
         F0 = self.model(sinput0).F

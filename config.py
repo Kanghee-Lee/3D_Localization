@@ -20,7 +20,7 @@ logging_arg.add_argument('--out_dir', type=str, default='outputs')
 trainer_arg = add_argument_group('Trainer')
 trainer_arg.add_argument('--trainer', type=str, default='HardestContrastiveLossTrainer')
 trainer_arg.add_argument('--save_freq_epoch', type=int, default=1)
-trainer_arg.add_argument('--batch_size', type=int, default=4)
+trainer_arg.add_argument('--batch_size', type=int, default=6)
 trainer_arg.add_argument('--val_batch_size', type=int, default=1)
 
 # Hard negative mining
@@ -106,8 +106,10 @@ misc_arg.add_argument(
 
 # Dataset specific configurations
 data_arg = add_argument_group('Data')
-data_arg.add_argument('--dataset', type=str, default='ThreeDMatchPairDataset')
-data_arg.add_argument('--voxel_size', type=float, default=0.025)
+data_arg.add_argument('--dataset', type=str, default='OxfordTrainDataset')
+data_arg.add_argument('--voxel_size', type=float, default=0.2)
+data_arg.add_argument(
+    '--oxford_dir', type=str, default="")
 data_arg.add_argument(
     '--threed_match_dir', type=str, default="/home/chrischoy/datasets/FCGF/threedmatch")
 data_arg.add_argument(
