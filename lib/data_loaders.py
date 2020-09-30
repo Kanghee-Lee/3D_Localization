@@ -91,8 +91,8 @@ def sample_random_trans(pcd, randg, rotation_range=360):
   cosval = np.cos(R)
   sinval = np.sin(R)
   R = np.array([[cosval, sinval, 0],
-                              [-sinval, cosval, 0],
-                              [0, 0, 1]])
+                [-sinval, cosval, 0],
+                [0, 0, 1]])
   T[:3, :3] = R
   #T[:3, 3] = R.dot(-np.mean(pcd, axis=0))
   return T
@@ -190,15 +190,6 @@ class OxfordTrainDataset(PairDataset):
 
       xyz0 = self.apply_transform(xyz0, T0)
       xyz1 = self.apply_transform(xyz1, T1)
-      '''
-      rotation_angle = np.random.uniform(low=-np.pi, high=self.np.pi)
-      cosval = np.cos(rotation_angle)
-      sinval = np.sin(rotation_angle)
-      trans = np.array([[cosval, sinval, 0],
-                                  [-sinval, cosval, 0],
-                                  [0, 0, 1]])
-      xyz1 = np.dot(xyz1, trans)
-      '''
     else:
       trans = np.identity(4)
 

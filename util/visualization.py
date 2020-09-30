@@ -1,6 +1,7 @@
 import copy
 import open3d as o3d
 import numpy as np
+import torch
 
 from sklearn.manifold import TSNE
 from matplotlib import pyplot as plt
@@ -36,12 +37,20 @@ def get_colored_point_cloud_feature(pcd, feature, voxel_size):
 
   return spheres
 
+def get_colored_point_cloud_feature_pair(pcd1, pcd2, feature1, feature2, voxel_size):
+  total = np.concatenate((feature1, feature2), axis=0)
+  tsne_results = embed_tsne(total)
+
+  color = get_color_map(tsne_results)
+  pcd1.colors = o3d.utility.Vector3dVector(color[:len(feature1),:])
+  pcd2.colors = o3d.utility.Vector3dVector(color[len(feature1):,:])
+
 
 def embed_tsne(data):
   """
   N x D np.array data
   """
-  tsne = TSNE(n_components=1, verbose=1, perplexity=40, n_iter=300, random_state=0)
+  tsne = TSNE(n_components=1, verbose=1, perplexity=45, n_iter=300, random_state=0)
   tsne_results = tsne.fit_transform(data)
   tsne_results = np.squeeze(tsne_results)
   tsne_min = np.min(tsne_results)
