@@ -13,7 +13,7 @@ from util.misc import extract_features
 from model import load_model
 from util.file import ensure_dir, get_folder_list, get_file_list
 from util.trajectory import read_trajectory, write_trajectory
-from util.pointcloud import make_open3d_point_cloud, evaluate_feature_3dmatch
+from util.pointcloud import make_open3d_point_cloud, make_open3d_feature_from_numpy, evaluate_feature_3dmatch
 from scripts.benchmark_util import do_single_pair_matching, gen_matching_pair, gather_results
 
 import torch
@@ -45,6 +45,7 @@ def quat_to_rotation(q, trans):
   T[2,0] = 2 * (q[1]*q[3] - q[0]*q[2])
   T[2,1] = 2 * (q[2]*q[3] + q[0]*q[1])
   T[2,2] = q[0]*q[0] - q[1]*q[1] - q[2]*q[2] + q[3]*q[3]
+  T = T.T
   T[:3, 3] = trans
   return T
 
@@ -91,6 +92,78 @@ def extract_features_batch(model, config, source_path, target_path, voxel_size, 
       logging.info(
           f'Average time: {tmeter.avg}, FPS: {num_feat / tmeter.sum}, time / feat: {tmeter.sum / num_feat}, '
       )
+
+def registration(source, feature, voxel_size):
+  """
+  Gather .log files produced in --target folder and run this Matlab script
+  https://github.com/andyzeng/3dmatch-toolbox#geometric-registration-benchmark
+  (see Geometric Registration Benchmark section in
+  http://3dmatch.cs.princeton.edu/)
+  """
+  with open(os.path.join(source, "oxford_test_local_gt.txt")) as f:
+    sets = f.readlines()
+    sets = [x.strip().split() for x in sets]
+  
+  success_meter, rte_meter, rre_meter = AverageMeter(), AverageMeter(), AverageMeter()
+  reg_timer = Timer()
+
+  for i in range(1,len(sets)):
+    T_gt = quat_to_rotation(sets[i][7:], sets[i][4:7])
+    name_i = "{}.bin".format(sets[i][0])
+    name_j = "{}.bin".format(sets[i][1])
+
+    # coord and feat form a sparse tensor.
+    data_i = np.load(os.path.join(feature, name_i + ".npz"))
+    coord_i, points_i, feat_i = data_i['xyz'], data_i['points'], data_i['feature']
+    data_j = np.load(os.path.join(feature, name_j + ".npz"))
+    coord_j, points_j, feat_j = data_j['xyz'], data_j['points'], data_j['feature']
+
+    # make pcd and feature to open3d object
+    pcd0 = make_open3d_point_cloud(coord_i)
+    pcd1 = make_open3d_point_cloud(coord_j)
+    feat0 = make_open3d_feature_from_numpy(feat_i)
+    feat1 = make_open3d_feature_from_numpy(feat_j)
+
+    reg_timer.tic()
+    distance_threshold = voxel_size * 2.0 # 1.0 ~ 3.0 
+    ransac_result = o3d.registration.registration_ransac_based_on_feature_matching(
+        pcd0, pcd1, feat0, feat1, distance_threshold,
+        o3d.registration.TransformationEstimationPointToPoint(False), 4, [
+            o3d.registration.CorrespondenceCheckerBasedOnEdgeLength(0.95), # 0.9 ~ 1.0
+            o3d.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold)
+        ], o3d.registration.RANSACConvergenceCriteria(4000000, 10000))
+    T_ransac = torch.from_numpy(ransac_result.transformation.astype(np.float32))
+    reg_timer.toc()
+
+    # Translation error
+    rte = np.linalg.norm(T_ransac[:3, 3] - T_gt[:3, 3])
+    rre = np.arccos((np.trace(T_ransac[:3, :3].t() @ T_gt[:3, :3]) - 1) / 2)
+
+    # Check if the ransac was successful. successful if rte < 2m and rre < 5◦
+    if rte < 2:
+      rte_meter.update(rte)
+
+    if not np.isnan(rre) and rre < np.pi / 180 * 5:
+      rre_meter.update(rre)
+
+    if rte < 2 and not np.isnan(rre) and rre < np.pi / 180 * 5:
+      success_meter.update(1)
+    else:
+      success_meter.update(0)
+      logging.info(f" ({i}/{len(sets)}) Failed with RTE: {rte}, RRE: {rre * 180 / np.pi}, Check: {2.0}, {5.0}")
+
+    if i % 10 == 0:
+      logging.info(
+          f" Current : {i}/{len(sets)}, " +
+          f" Reg time: {reg_timer.avg}, RTE: {rte_meter.avg}," +
+          f" RRE: {rre_meter.avg}, Success: {success_meter.sum} / {success_meter.count}" +
+          f" ({success_meter.avg * 100} %)")
+      reg_timer.reset()
+  
+  logging.info(
+      f"RTE: {rte_meter.avg}, var: {rte_meter.var}," +
+      f" RRE: {rre_meter.avg}, var: {rre_meter.var}, Success: {success_meter.sum} " +
+      f"/ {success_meter.count} ({success_meter.avg * 100} %)")
 
 def do_single_pair_evaluation(feature_path,
                               set,
@@ -189,6 +262,10 @@ if __name__ == '__main__':
       help='voxel size to preprocess point cloud')
   parser.add_argument('--extract_features', action='store_true')
   parser.add_argument('--evaluate_feature_match_recall', action='store_true')
+  parser.add_argument(
+      '--evaluate_registration',
+      action='store_true',
+      help='The target directory must contain extracted features')
   parser.add_argument('--with_cuda', action='store_true')
   parser.add_argument(
       '--num_rand_keypoints',
@@ -231,3 +308,8 @@ if __name__ == '__main__':
     with torch.no_grad():
       feature_evaluation(args.source, args.target, args.voxel_size,
                          args.num_rand_keypoints)
+  
+  if args.evaluate_registration:
+    assert (args.source is not None)
+    with torch.no_grad():
+      registration(args.source, args.target, args.voxel_size)
