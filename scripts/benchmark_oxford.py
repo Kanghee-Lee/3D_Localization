@@ -1,10 +1,10 @@
 import os
 import sys
+import open3d as o3d
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import argparse
 import logging
-import open3d as o3d
 
 from lib.timer import Timer, AverageMeter
 
@@ -14,7 +14,7 @@ from model import load_model
 from util.file import ensure_dir, get_folder_list, get_file_list
 from util.trajectory import read_trajectory, write_trajectory
 from util.pointcloud import make_open3d_point_cloud, make_open3d_feature_from_numpy, evaluate_feature_3dmatch
-from scripts.benchmark_util import do_single_pair_matching, gen_matching_pair, gather_results
+from scripts.benchmark_util import do_single_pair_matching, gen_matching_pair, gather_results, run_ransac
 
 import torch
 
@@ -45,7 +45,6 @@ def quat_to_rotation(q, trans):
   T[2,0] = 2 * (q[1]*q[3] - q[0]*q[2])
   T[2,1] = 2 * (q[2]*q[3] + q[0]*q[1])
   T[2,2] = q[0]*q[0] - q[1]*q[1] - q[2]*q[2] + q[3]*q[3]
-  T = T.T
   T[:3, 3] = trans
   return T
 
@@ -125,14 +124,15 @@ def registration(source, feature, voxel_size):
     feat1 = make_open3d_feature_from_numpy(feat_j)
 
     reg_timer.tic()
-    distance_threshold = voxel_size * 2.0 # 1.0 ~ 3.0 
+    distance_threshold = voxel_size * 3.0 # 1.0 ~ 3.0 
     ransac_result = o3d.registration.registration_ransac_based_on_feature_matching(
         pcd0, pcd1, feat0, feat1, distance_threshold,
         o3d.registration.TransformationEstimationPointToPoint(False), 4, [
             o3d.registration.CorrespondenceCheckerBasedOnEdgeLength(0.95), # 0.9 ~ 1.0
             o3d.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold)
         ], o3d.registration.RANSACConvergenceCriteria(4000000, 10000))
-    T_ransac = torch.from_numpy(ransac_result.transformation.astype(np.float32))
+    T_ransac = ransac_result.transformation.astype(np.float32)
+    T_ransac = torch.from_numpy(np.linalg.inv(T_ransac))
     reg_timer.toc()
 
     # Translation error
@@ -146,17 +146,18 @@ def registration(source, feature, voxel_size):
     if not np.isnan(rre) and rre < np.pi / 180 * 5:
       rre_meter.update(rre)
 
-    if rte < 2 and not np.isnan(rre) and rre < np.pi / 180 * 5:
+    if not np.isnan(rre) and rre < np.pi / 180 * 5 and rte < 2:
       success_meter.update(1)
+      logging.info(f" ({i}/{len(sets)}) Suceed with RTE: {rte}, RRE: {rre}({rre * 180 / np.pi}), Check: {2.0}, {5.0}")
     else:
       success_meter.update(0)
-      logging.info(f" ({i}/{len(sets)}) Failed with RTE: {rte}, RRE: {rre * 180 / np.pi}, Check: {2.0}, {5.0}")
+      logging.info(f" ({i}/{len(sets)}) Failed with RTE: {rte}, RRE: {rre}({rre * 180 / np.pi}), Check: {2.0}, {5.0}")
 
     if i % 10 == 0:
       logging.info(
           f" Current : {i}/{len(sets)}, " +
           f" Reg time: {reg_timer.avg}, RTE: {rte_meter.avg}," +
-          f" RRE: {rre_meter.avg}, Success: {success_meter.sum} / {success_meter.count}" +
+          f" RRE: {rre_meter.avg}({rre * 180 / np.pi}), Success: {success_meter.sum} / {success_meter.count}" +
           f" ({success_meter.avg * 100} %)")
       reg_timer.reset()
   
