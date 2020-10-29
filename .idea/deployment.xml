@@ -1,14 +1,4 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" serverName="gh@141.223.85.105:2222" remoteFilesAllowedToDisappearOnAutoupload="false">
-    <serverData>
-      <paths name="gh@141.223.85.105:2222">
-        <serverdata>
-          <mappings>
-            <mapping deploy="/home/gh/code/FCGF" local="$PROJECT_DIR$" />
-          </mappings>
-        </serverdata>
-      </paths>
-    </serverData>
-  </component>
+  <component name="PublishConfigData" serverName="gh@141.223.85.105:2222" remoteFilesAllowedToDisappearOnAutoupload="false" />
 </project>

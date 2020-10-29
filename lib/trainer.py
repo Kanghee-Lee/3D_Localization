@@ -7,8 +7,9 @@ import os.path as osp
 import gc
 import logging
 import numpy as np
+from scipy.spatial import cKDTree
 import json
-
+from torchviz import make_dot
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
@@ -38,16 +39,20 @@ class AlignmentTrainer:
     num_feats = 1  # occupancy only for 3D Match dataset. For ScanNet, use RGB 3 channels.
 
     # Model initialization
-    Model = load_model(config.model)
-    model = Model(
-        num_feats,
-        config.model_n_out,
-        bn_momentum=config.bn_momentum,
-        normalize_feature=config.normalize_feature,
-        conv1_kernel_size=config.conv1_kernel_size,
-        D=3)
+    if config.load_fcgf :
+      Model = load_model(config.model)
+      model = Model()
+    else :
+      Model = load_model(config.model)
+      model = Model(
+          num_feats,
+          config.model_n_out,
+          bn_momentum=config.bn_momentum,
+          normalize_feature=config.normalize_feature,
+          conv1_kernel_size=config.conv1_kernel_size,
+          D=3)
 
-    if config.weights:
+    if config.weights and not config.load_fcgf:
       # 수정
       # pretrained_dict = ...
       # model_dict = model.state_dict()
@@ -81,6 +86,9 @@ class AlignmentTrainer:
     logging.info(model)
     # 수정
     self.freeze = freeze
+    self.load_fcgf = config.load_fcgf
+
+    self.target_path = config.target_path
     self.config = config
 
     self.max_epoch = config.max_epoch
@@ -91,7 +99,7 @@ class AlignmentTrainer:
     self.best_val_metric = config.best_val_metric
     self.best_val_epoch = -np.inf
     self.best_val = np.inf
-
+    self.checkpoint_name = config.checkpoint_name
     if config.use_gpu and not torch.cuda.is_available():
       logging.warning('Warning: There\'s no CUDA support on this machine, '
                       'training is performed on CPU.')
@@ -100,15 +108,15 @@ class AlignmentTrainer:
     self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # 수정
-    if freeze :
-      for name, p in model.named_parameters():
-        if 'conv_1d' not in name or 'bn_1' not in name:
-          p.requires_grad = False
+    # if freeze and not self.load_fcgf:
+    #   for name, p in model.named_parameters():
+    #     if 'conv_1d' not in name or 'bn_1' not in name:
+    #       p.requires_grad = False
       # for name, p in model.named_parameters() :
       #   print(name, p.requires_grad)
 
     params = [p for p in model.parameters() if p.requires_grad]
-
+    # print(params)
     self.optimizer = getattr(optim, config.optimizer)(
         params,
         lr=config.lr,
@@ -136,6 +144,7 @@ class AlignmentTrainer:
 
     self.test_valid = True if self.val_data_loader is not None else False
     self.log_step = int(np.sqrt(self.config.batch_size))
+    # self.model = torch.nn.DataParallel(self.model)
     self.model = self.model.to(self.device)
     self.writer = SummaryWriter(logdir=config.out_dir)
 
@@ -167,6 +176,7 @@ class AlignmentTrainer:
     #       if 'conv_1d' in name or 'bn_1' in name :
     #         dd
 
+    # ver5
 
     print('------------Training start------------')
     # Baseline random feature performance
@@ -181,7 +191,7 @@ class AlignmentTrainer:
       lr = self.scheduler.get_lr()
       logging.info(f" Epoch: {epoch}, LR: {lr}")
       self._train_epoch(epoch)
-      self._save_checkpoint(epoch)
+      self._save_checkpoint(epoch, self.checkpoint_name)
       self.scheduler.step()
 
       if self.test_valid and epoch % self.val_epoch_freq == 0:
@@ -202,7 +212,109 @@ class AlignmentTrainer:
               f'Current best val model with {self.best_val_metric}: {self.best_val} at epoch {self.best_val_epoch}'
           )
 
-  def _save_checkpoint(self, epoch, filename='checkpoint'):
+####################################################################################################################
+
+  def train_mlp(self):
+    """
+    Full training logic
+    """
+
+    # # 수정
+    # if freeze :
+    #   with torch.no_grad() :
+    #     for name, p in self.model.named_parameters() :
+    #       if 'conv_1d' in name or 'bn_1' in name :
+    #         dd
+
+    # ver5
+
+    print('------------Training start------------')
+    # Baseline random feature performance
+    if self.test_valid:
+      with torch.no_grad():
+        val_dict = self._valid_epoch_mlp()
+
+      for k, v in val_dict.items():
+        self.writer.add_scalar(f'val/{k}', v, 0)
+
+    for epoch in range(self.start_epoch, self.max_epoch + 1):
+      lr = self.scheduler.get_lr()
+      logging.info(f" Epoch: {epoch}, LR: {lr}")
+      self._train_epoch_mlp(epoch)
+      self._save_checkpoint(epoch, self.checkpoint_name)
+      self.scheduler.step()
+
+      if self.test_valid and epoch % self.val_epoch_freq == 0:
+        with torch.no_grad():
+          val_dict = self._valid_epoch_mlp()
+
+        for k, v in val_dict.items():
+          self.writer.add_scalar(f'val/{k}', v, epoch)
+        if self.best_val > val_dict[self.best_val_metric]:
+          logging.info(
+              f'Saving the best val model with {self.best_val_metric}: {val_dict[self.best_val_metric]}'
+          )
+          self.best_val = val_dict[self.best_val_metric]
+          self.best_val_epoch = epoch
+          self._save_checkpoint(epoch, self.checkpoint_name + 'best')
+        else:
+          logging.info(
+              f'Current best val model with {self.best_val_metric}: {self.best_val} at epoch {self.best_val_epoch}'
+          )
+
+####################################################################################################################
+  def train_reg(self):
+    """
+    Full training logic
+    """
+
+    # # 수정
+    # if freeze :
+    #   with torch.no_grad() :
+    #     for name, p in self.model.named_parameters() :
+    #       if 'conv_1d' in name or 'bn_1' in name :
+    #         dd
+
+    # ver5
+
+    print('------------Training start------------')
+    # Baseline random feature performance
+    if self.test_valid:
+      with torch.no_grad():
+        val_dict = self._valid_epoch_reg()
+
+      for k, v in val_dict.items():
+        self.writer.add_scalar(f'val/{k}', v, 0)
+
+    for epoch in range(self.start_epoch, self.max_epoch + 1):
+      lr = self.scheduler.get_lr()
+      logging.info(f" Epoch: {epoch}, LR: {lr}")
+      self._train_epoch_reg(epoch)
+      self._save_checkpoint(epoch, self.checkpoint_name)
+      self.scheduler.step()
+
+      if self.test_valid and epoch % self.val_epoch_freq == 0:
+        with torch.no_grad():
+          val_dict = self._valid_epoch_reg()
+
+        for k, v in val_dict.items():
+          self.writer.add_scalar(f'val/{k}', v, epoch)
+        if self.best_val > val_dict[self.best_val_metric]:
+          logging.info(
+            f'Saving the best val model with {self.best_val_metric}: {val_dict[self.best_val_metric]}'
+          )
+          self.best_val = val_dict[self.best_val_metric]
+          self.best_val_epoch = epoch
+          self._save_checkpoint(epoch, self.checkpoint_name + 'best')
+        else:
+          logging.info(
+            f'Current best val model with {self.best_val_metric}: {self.best_val} at epoch {self.best_val_epoch}'
+          )
+
+####################################################################################################################
+
+
+  def _save_checkpoint(self, epoch, filename='checkpoint_128_th1.4'):
     state = {
         'epoch': epoch,
         'state_dict': self.model.state_dict(),
@@ -216,6 +328,27 @@ class AlignmentTrainer:
     filename = os.path.join(self.checkpoint_dir, f'{filename}.pth')
     logging.info("Saving checkpoint: {} ...".format(filename))
     torch.save(state, filename)
+
+  # # ver5
+  # def _save_fcgf(self, epoch, filename='checkpoint'):
+  #   # state = {
+  #   #     'epoch': epoch,
+  #   #     'state_dict': self.model.state_dict(),
+  #   #     'optimizer': self.optimizer.state_dict(),
+  #   #     'scheduler': self.scheduler.state_dict(),
+  #   #     'config': self.config,
+  #   #     'best_val': self.best_val,
+  #   #     'best_val_epoch': self.best_val_epoch,
+  #   #     'best_val_metric': self.best_val_metric
+  #   # }
+  #   np.savez_compressed(
+  #     os.path.join(target_path, save_fn),
+  #     points=np.array(pcd.points),
+  #     xyz=xyz_down,
+  #     feature=feature.detach().cpu().numpy())
+  #   filename = os.path.join(self.checkpoint_dir, f'{filename}.pth')
+  #   logging.info("Saving checkpoint: {} ...".format(filename))
+  #   torch.save(state, filename)
 
 
 class ContrastiveLossTrainer(AlignmentTrainer):
@@ -233,7 +366,7 @@ class ContrastiveLossTrainer(AlignmentTrainer):
     self.neg_thresh = config.neg_thresh
     self.pos_thresh = config.pos_thresh
     self.neg_weight = config.neg_weight
-
+    self.gp_weight = config.gp_weight
   def apply_transform(self, pts, trans):
     R = trans[:3, :3]
     T = trans[:3, 3]
@@ -458,7 +591,7 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
     self.neg_thresh = config.neg_thresh
     self.pos_thresh = config.pos_thresh
     self.neg_weight = config.neg_weight
-
+    self.gp_weight = config.gp_weight
   def apply_transform(self, pts, trans):
     R = trans[:3, :3]
     T = trans[:3, 3]
@@ -480,6 +613,60 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
     mask = np.isin(neg_keys, pos_keys, assume_unique=False)
     return neg_pairs[np.logical_not(mask)]
 
+  # ver5
+  def _extract(self):
+    gc.collect()
+    self.model.eval()
+
+    data_loader = self.data_loader
+    data_loader_iter = self.data_loader.__iter__()
+
+    iter_size = self.iter_size
+    start_iter = 0
+
+    self.val_data_loader.dataset.reset_seed(0)
+    num_data = 0
+    tot_num_data = len(self.val_data_loader.dataset)
+    if self.val_max_iter > 0:
+      tot_num_data = min(self.val_max_iter, tot_num_data)
+    val_data_loader_iter = self.val_data_loader.__iter__()
+    print('trainer.py - extract - tot_num : ', tot_num_data)
+    for batch_idx in range(tot_num_data):
+      val_input_dict = val_data_loader_iter.next()
+      sinput0 = ME.SparseTensor(
+        val_input_dict['sinput0_F'], coords=val_input_dict['sinput0_C']).to(self.device)
+      F0,F1, F2, F3, fcgf_length0 = self.model(sinput0)
+      np.savez_compressed(
+        os.path.join(self.target_path, val_input_dict['file0'][0]),
+        fcgf0=F0.detach().cpu().numpy(),
+        fcgf1=F1.detach().cpu().numpy(),
+        fcgf2=F2.detach().cpu().numpy(),
+        fcgf3=F3.detach().cpu().numpy(),
+        length=fcgf_length0)
+
+    for curr_iter in range(len(data_loader) // iter_size):
+      for iter_idx in range(iter_size):
+        input_dict = data_loader_iter.next()
+        sinput0 = ME.SparseTensor(
+          input_dict['sinput0_F'], coords=input_dict['sinput0_C']).to(self.device)
+        F0, F1, F2, F3, fcgf_length0 = self.model(sinput0)
+        np.savez_compressed(
+          os.path.join(self.target_path, input_dict['file0'][0]),
+          fcgf0=F0.detach().cpu().numpy(),
+          fcgf1=F1.detach().cpu().numpy(),
+          fcgf2=F2.detach().cpu().numpy(),
+          fcgf3=F3.detach().cpu().numpy(),
+          length = fcgf_length0)
+
+      if curr_iter % self.config.stat_freq == 0:
+        logging.info(
+          "FCGF extract Epoch: [{}/{}]"
+          .format(curr_iter,
+                  len(self.data_loader) //
+                  iter_size, ))
+
+
+
   def _train_epoch(self, epoch):
     gc.collect()
     self.model.train()
@@ -493,14 +680,17 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
     iter_size = self.iter_size
     start_iter = (epoch - 1) * (len(data_loader) // iter_size)
 
-    data_meter, data_timer, total_timer = AverageMeter(), Timer(), Timer()
+    data_meter, model_meter, train_meter, data_timer, total_timer, model_timer, train_timer = AverageMeter(), AverageMeter(), AverageMeter(), Timer(), Timer(), Timer(), Timer()
 
     # Main training
+
     for curr_iter in range(len(data_loader) // iter_size):
       self.optimizer.zero_grad()
       batch_pos_loss, batch_neg_loss, batch_loss = 0, 0, 0
 
       data_time = 0
+      model_time = 0
+      train_time = 0
       total_timer.tic()
       for iter_idx in range(iter_size):
         # Caffe iter size
@@ -508,7 +698,11 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
         input_dict = data_loader_iter.next()
         data_time += data_timer.toc(average=False)
 
+        model_timer.tic()
         # pairs consist of (xyz1 index, xyz0 index)
+        # print('in'*20)
+        # print('train_epoch - input_dict.shape : ', type(input_dict['sinput0_C']))
+        # print('train_epoch - input_dict.shape2 : ', input_dict['sinput0_F'].shape)
         sinput0 = ME.SparseTensor(
             input_dict['sinput0_F'], coords=input_dict['sinput0_C']).to(self.device)
 #        F0 = self.model(sinput0).F
@@ -517,9 +711,12 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
             input_dict['sinput1_F'], coords=input_dict['sinput1_C']).to(self.device)
 #        F1 = self.model(sinput1).F
         F1 = self.model(sinput1)
+
+        model_time += model_timer.toc(average=False)
         # print('trainer.py - F0 shape', F0.shape)
         N0, N1 = len(sinput0), len(sinput1)
-
+        # print(len(data_loader))
+        # print(len(input_dict))
         # 수정
 
         # pos_pairs = input_dict['correspondences']
@@ -532,31 +729,59 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
         # pos0 = F0.index_select(0, pos_pairs[:, 0])
         # pos1 = F1.index_select(0, pos_pairs[:, 1])
 
-
-        if input_dict['pcd_match'] :
-          pos_loss_mean = ((F0 - F1).pow(2).sum(1)).mean() / iter_size
-
-          neg_loss_mean = 0
-          loss = pos_loss_mean
-          pos_loss_mean = pos_loss_mean.item()
-          # print('------------------Positive------------------')
-          # print('trainer.py')
-          # print('F0', F0)
-          # print('F1', F0)
-          # print('pos_loss', loss.item())
-
+        # print('trainer.py - train_epoch : ', input_dict['pcd_match'])
+        # print(F0.shape)
+        # print(F1.shape)
+        train_timer.tic()
+        pos_ind=[]
+        neg_ind=[]
+        # pos_ind = [ind for ind in range(len(input_dict['pcd_match'])) if input_dict['pcd_match'][ind] == True]
+        for ind in range(len(input_dict['pcd_match'])) :
+          if input_dict['pcd_match'][ind] :
+            pos_ind.append(ind)
+          else :
+            neg_ind.append(ind)
+        if pos_ind :
+          pos_loss = ((F0[pos_ind] - F1[pos_ind]).pow(2).sum(1))
         else :
-          pos_loss_mean = 0
-          neg_loss_mean = (F.relu(self.neg_thresh -
-                          ((F0 - F1).pow(2).sum(1) + 1e-4).sqrt()).pow(2)).mean() / iter_size
+          pos_loss = torch.tensor(0.)
+        if neg_ind :
+          neg_loss = (F.relu(self.neg_thresh -
+                                  ((F0[neg_ind] - F1[neg_ind]).pow(2).sum(1) + 1e-4).sqrt()).pow(2))
+        else :
+          neg_loss = torch.tensor(0.)
 
-          loss = neg_loss_mean
-          neg_loss_mean = neg_loss_mean.item()
-          # print('------------------Negative------------------')
-          # print('trainer.py')
-          # print('F0', F0)
-          # print('F1', F0)
-          # print('neg_loss', loss.item())
+        pos_loss_mean = pos_loss.mean() / iter_size
+        neg_loss_mean = neg_loss.mean() / iter_size
+
+        loss = pos_loss_mean + self.neg_weight * neg_loss_mean
+
+        # if input_dict['pcd_match'] :
+        #   pos_loss_mean = ((F0 - F1).pow(2).sum(1)).mean() / iter_size
+        #
+        #   neg_loss_mean = 0
+        #   loss = pos_loss_mean
+        #   pos_loss_mean = pos_loss_mean.item()
+        #   # print('------------------Positive------------------')
+        #   # print('trainer.py')
+        #   # print('F0', F0)
+        #   # print('F1', F0)
+        #   # print('pos_loss', loss.item())
+        #
+        # else :
+        #   pos_loss_mean = 0
+        #   neg_loss_mean = (F.relu(self.neg_thresh -
+        #                   ((F0 - F1).pow(2).sum(1) + 1e-4).sqrt()).pow(2)).mean() / iter_size
+        #
+        #   loss = neg_loss_mean
+        #   neg_loss_mean = neg_loss_mean.item()
+        #   # print('------------------Negative------------------')
+        #   # print('trainer.py')
+        #   # print('F0', F0)
+        #   # print('F1', F0)
+        #   # print('neg_loss', loss.item())
+
+
         # # Positive loss
         # pos_loss = (F0 - F1).pow(2).sum(1)
         #
@@ -575,8 +800,10 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
         # batch_pos_loss += pos_loss_mean.item()
         # batch_neg_loss += neg_loss_mean.item()
         batch_loss += loss.item()
-        batch_pos_loss += pos_loss_mean
-        batch_neg_loss += neg_loss_mean
+        batch_pos_loss += pos_loss_mean.item()
+        batch_neg_loss += neg_loss_mean.item()
+
+        train_time += train_timer.toc(average=False)
       self.optimizer.step()
 
       torch.cuda.empty_cache()
@@ -585,22 +812,282 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
 
       total_timer.toc()
       data_meter.update(data_time)
-
+      model_meter.update(model_time)
+      train_meter.update(train_time)
       # Print logs
       if curr_iter % self.config.stat_freq == 0:
-        # self.writer.add_scalar('train/loss', batch_loss, start_iter + curr_iter)
-        # self.writer.add_scalar('train/pos_loss', batch_pos_loss, start_iter + curr_iter)
-        # self.writer.add_scalar('train/neg_loss', batch_neg_loss, start_iter + curr_iter)
         self.writer.add_scalar('train/loss', batch_loss, start_iter + curr_iter)
+        self.writer.add_scalar('train/pos_loss', batch_pos_loss, start_iter + curr_iter)
+        self.writer.add_scalar('train/neg_loss', batch_neg_loss, start_iter + curr_iter)
+
         logging.info(
             "Train Epoch: {} [{}/{}], Current Loss: {:.3e} Pos: {:.3f} Neg: {:.3f}"
             .format(epoch, curr_iter,
                     len(self.data_loader) //
                     iter_size, batch_loss, batch_pos_loss, batch_neg_loss) +
-            "\tData time: {:.4f}, Train time: {:.4f}, Iter time: {:.4f}".format(
-                data_meter.avg, total_timer.avg - data_meter.avg, total_timer.avg))
+            "\tData time: {:.4f}, Train time: {:.4f}, Iter time: {:.4f}, Model time: {:.4f}, Trainer time: {:.4f}".format(
+                data_meter.avg, total_timer.avg - data_meter.avg, total_timer.avg, model_meter.avg, train_meter.avg))
         data_meter.reset()
         total_timer.reset()
+
+########################################################################################################################
+
+  def _train_epoch_mlp(self, epoch):
+    gc.collect()
+    self.model.train()
+    # Epoch starts from 1
+    total_loss = 0
+    total_num = 0.0
+
+    data_loader = self.data_loader
+    data_loader_iter = self.data_loader.__iter__()
+
+    iter_size = self.iter_size
+    start_iter = (epoch - 1) * (len(data_loader) // iter_size)
+
+    data_meter, model_meter, train_meter, data_timer, total_timer, model_timer, train_timer = AverageMeter(), AverageMeter(), AverageMeter(), Timer(), Timer(), Timer(), Timer()
+
+    # Main training
+
+    for curr_iter in range(len(data_loader) // iter_size):
+      self.optimizer.zero_grad()
+      batch_pos_loss, batch_neg_loss, batch_loss = 0, 0, 0
+
+      data_time = 0
+      model_time = 0
+      train_time = 0
+      total_timer.tic()
+      for iter_idx in range(iter_size):
+        # Caffe iter size
+        data_timer.tic()
+        input_dict = data_loader_iter.next()
+        data_time += data_timer.toc(average=False)
+
+        model_timer.tic()
+
+        fcgf0 = input_dict['fcgf0']
+        fcgf1 = input_dict['fcgf1']
+        length0 = input_dict['length0']
+        length1 = input_dict['length1']
+        overlap = np.array(input_dict['overlap'])
+        overlap = torch.from_numpy(overlap).to(self.device)
+        fcgf0, fcgf1 = fcgf0.to(self.device), fcgf1.to(self.device)
+
+        F0 = self.model(fcgf0, length0)
+        F1 = self.model(fcgf1, length1)
+
+        model_time += model_timer.toc(average=False)
+        train_timer.tic()
+        pos_ind = []
+        neg_ind = []
+        # pos_ind = [ind for ind in range(len(input_dict['pcd_match'])) if input_dict['pcd_match'][ind] == True]
+        for ind in range(len(input_dict['pcd_match'])):
+          if input_dict['pcd_match'][ind]:
+            pos_ind.append(ind)
+          else:
+            neg_ind.append(ind)
+        pos_loss, neg_loss = torch.tensor(0.), torch.tensor(0.)
+        # print(overlap)
+        # print(overlap[pos_ind])
+        # assert 0
+        if pos_ind:
+          pos_loss = (F.relu(
+                             ((F0[pos_ind] - F1[pos_ind]).pow(2).sum(1) + 1e-7).sqrt()-(1-overlap[pos_ind])).pow(2))
+          # pos_loss = ((F0[pos_ind] - F1[pos_ind]).pow(2).sum(1))
+
+        if neg_ind:
+          neg_loss = (F.relu(self.neg_thresh -
+                             ((F0[neg_ind] - F1[neg_ind]).pow(2).sum(1) + 1e-7).sqrt()).pow(2))
+
+        # make_dot(F0, params=dict(list(self.model.named_parameters()))).render("att_k_fc", format="png")
+        # assert 0
+        # print((F0[pos_ind] - F1[pos_ind]).pow(2).sum(1))
+        # print(((F0[pos_ind] - F1[pos_ind]).pow(2).sum(1) + 1e-7).sqrt())
+        # print(F.relu(((F0[pos_ind] - F1[pos_ind]).pow(2).sum(1) + 1e-7).sqrt()-(1-overlap[pos_ind])).pow(2))
+        # print(overlap[pos_ind])
+        # print('pos : ', ((F0[pos_ind] - F1[pos_ind]).pow(2).sum(1) + 1e-7).sqrt())
+        # print('neg : ', ((F0[neg_ind] - F1[neg_ind]).pow(2).sum(1) + 1e-7).sqrt())
+        pos_loss_mean = pos_loss.mean() / iter_size
+        neg_loss_mean = neg_loss.mean() / iter_size
+        loss = pos_loss_mean + self.neg_weight * neg_loss_mean
+        # Weighted loss
+        # loss = pos_loss_mean + self.neg_weight * neg_loss_mean
+        loss.backward(
+        )  # To accumulate gradient, zero gradients only at the beginning of iter_size
+
+        batch_loss += loss.item()
+        batch_pos_loss += pos_loss_mean.item()
+        batch_neg_loss += neg_loss_mean.item()
+
+        train_time += train_timer.toc(average=False)
+
+      self.optimizer.step()
+
+      torch.cuda.empty_cache()
+
+      total_timer.toc()
+      data_meter.update(data_time)
+      model_meter.update(model_time)
+      train_meter.update(train_time)
+      # Print logs
+      if curr_iter % self.config.stat_freq == 0:
+        self.writer.add_scalar('train/loss', batch_loss, start_iter + curr_iter)
+        self.writer.add_scalar('train/pos_loss', batch_pos_loss, start_iter + curr_iter)
+        self.writer.add_scalar('train/neg_loss', batch_neg_loss, start_iter + curr_iter)
+
+        logging.info(
+          "Train Epoch: {} [{}/{}], Current Loss: {:.3e} Pos: {:.3f} Neg: {:.3f}"
+          .format(epoch, curr_iter,
+                  len(self.data_loader) //
+                  iter_size, batch_loss, batch_pos_loss, batch_neg_loss) +
+          "\tData time: {:.4f}, Train time: {:.4f}, Iter time: {:.4f}, Model time: {:.4f}, Trainer time: {:.4f}".format(
+            data_meter.avg, total_timer.avg - data_meter.avg, total_timer.avg, model_meter.avg, train_meter.avg))
+        data_meter.reset()
+        total_timer.reset()
+
+########################################################################################################################
+  def _train_epoch_reg(self, epoch):
+    gc.collect()
+    self.model.train()
+    # Epoch starts from 1
+    total_loss = 0
+    total_num = 0.0
+
+    data_loader = self.data_loader
+    data_loader_iter = self.data_loader.__iter__()
+
+    iter_size = self.iter_size
+    start_iter = (epoch - 1) * (len(data_loader) // iter_size)
+
+    data_meter, model_meter, train_meter, data_timer, total_timer, model_timer, train_timer = AverageMeter(), AverageMeter(), AverageMeter(), Timer(), Timer(), Timer(), Timer()
+
+    # Main training
+
+    for curr_iter in range(len(data_loader) // iter_size):
+      self.optimizer.zero_grad()
+      batch_pos_loss, batch_neg_loss, batch_loss, batch_gp_loss = 0, 0, 0, 0
+
+      data_time = 0
+      model_time = 0
+      train_time = 0
+      total_timer.tic()
+      for iter_idx in range(iter_size):
+        # Caffe iter size
+        data_timer.tic()
+        input_dict = data_loader_iter.next()
+        data_time += data_timer.toc(average=False)
+
+        model_timer.tic()
+
+        # sinput0 = ME.SparseTensor(
+        #   input_dict['sinput0_F'], coords=input_dict['sinput0_C']).to(self.device)
+        # #        F0 = self.model(sinput0).F
+        # F0 = self.model(sinput0)
+        # sinput1 = ME.SparseTensor(
+        #   input_dict['sinput1_F'], coords=input_dict['sinput1_C']).to(self.device)
+        # #        F1 = self.model(sinput1).F
+        # F1 = self.model(sinput1)
+
+        fcgf0 = input_dict['fcgf0']
+        fcgf1 = input_dict['fcgf1']
+        length0 = input_dict['length0']
+        length1 = input_dict['length1']
+
+        fcgf0, fcgf1 = fcgf0.to(self.device), fcgf1.to(self.device)
+
+        F0, gp0, n0 = self.model(fcgf0, length0)
+        F1, gp1, n1 = self.model(fcgf1, length1)
+        n0 = torch.from_numpy(n0).to(self.device)
+        n1 = torch.from_numpy(n1).to(self.device)
+
+        gp_loss0= torch.norm((gp0-(n0//8)), dim=(1))
+        gp_loss0 = gp_loss0.mean()
+
+        gp_loss1 = torch.norm((gp1 - (n1 // 8)), dim=(1))
+        gp_loss1 = gp_loss1.mean()
+
+        gp_loss = gp_loss0 + gp_loss1
+
+        model_time += model_timer.toc(average=False)
+        train_timer.tic()
+        pos_ind = []
+        neg_ind = []
+        # pos_ind = [ind for ind in range(len(input_dict['pcd_match'])) if input_dict['pcd_match'][ind] == True]
+        for ind in range(len(input_dict['pcd_match'])):
+          if input_dict['pcd_match'][ind]:
+            pos_ind.append(ind)
+          else:
+            neg_ind.append(ind)
+        pos_loss, neg_loss = torch.tensor(0.), torch.tensor(0.)
+        if pos_ind:
+          pos_loss = ((F0[pos_ind] - F1[pos_ind]).pow(2).sum(1))
+
+        if neg_ind:
+          neg_loss = (F.relu(self.neg_thresh -
+                             ((F0[neg_ind] - F1[neg_ind]).pow(2).sum(1) + 1e-4).sqrt()).pow(2))
+
+        # make_dot(F0, params=dict(list(self.model.named_parameters()))).render("att_k_fc", format="png")
+        # assert 0
+
+        # for name, param in self.model.named_parameters():
+        #   print(name, param.requires_grad)
+        #   print(param.data)
+        # print(F0[0])
+        #
+        # print(F1[0])
+
+        # if True in input_dict['pcd_match'] :
+        #
+        #   print(input_dict['file0'], input_dict['file1'], input_dict['pcd_match'])
+        #   assert 0
+        # print(input_dict['pcd_match'])
+        # print(pos_loss)
+        # print('-'*30)
+        # print((F0[neg_ind] - F1[neg_ind]).pow(2).sum(1))
+        # print(self.neg_thresh-((F0[neg_ind] - F1[neg_ind]).pow(2).sum(1)+1e-4).sqrt())
+        # print((self.neg_thresh - ((F0[neg_ind] - F1[neg_ind]).pow(2).sum(1) + 1e-4).sqrt()).pow(2))
+        # print(F.relu(self.neg_thresh - ((F0[neg_ind] - F1[neg_ind]).pow(2).sum(1) + 1e-4).sqrt()).pow(2))
+        # print(neg_loss)
+
+        pos_loss_mean = pos_loss.mean() / iter_size
+        neg_loss_mean = neg_loss.mean() / iter_size
+        loss = pos_loss_mean + self.neg_weight * neg_loss_mean + self.gp_weight * gp_loss
+        # Weighted loss
+        # loss = pos_loss_mean + self.neg_weight * neg_loss_mean
+        loss.backward(
+        )  # To accumulate gradient, zero gradients only at the beginning of iter_size
+
+        batch_loss += loss.item()
+        batch_pos_loss += pos_loss_mean.item()
+        batch_neg_loss += neg_loss_mean.item()
+        batch_gp_loss += gp_loss.item()
+        train_time += train_timer.toc(average=False)
+      self.optimizer.step()
+
+      torch.cuda.empty_cache()
+
+      total_timer.toc()
+      data_meter.update(data_time)
+      model_meter.update(model_time)
+      train_meter.update(train_time)
+      # Print logs
+      if curr_iter % self.config.stat_freq == 0:
+        self.writer.add_scalar('train/loss', batch_loss, start_iter + curr_iter)
+        self.writer.add_scalar('train/pos_loss', batch_pos_loss, start_iter + curr_iter)
+        self.writer.add_scalar('train/neg_loss', batch_neg_loss, start_iter + curr_iter)
+        self.writer.add_scalar('train/gp_loss', batch_gp_loss, start_iter + curr_iter)
+
+        logging.info(
+          "Train Epoch: {} [{}/{}], Current Loss: {:.3e} Pos: {:.3f} Neg: {:.3f} Gp: {:.3f}"
+          .format(epoch, curr_iter,
+                  len(self.data_loader) //
+                  iter_size, batch_loss, batch_pos_loss, batch_neg_loss, batch_gp_loss) +
+          "\tData time: {:.4f}, Train time: {:.4f}, Iter time: {:.4f}, Model time: {:.4f}, Trainer time: {:.4f}".format(
+            data_meter.avg, total_timer.avg - data_meter.avg, total_timer.avg, model_meter.avg, train_meter.avg))
+        data_meter.reset()
+        total_timer.reset()
+
+########################################################################################################################
 
   def _valid_epoch(self):
     # Change the network to evaluation mode
@@ -632,35 +1119,27 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
       F1 = self.model(sinput1)
       feat_timer.toc()
 
-      # matching_timer.tic()
-      # xyz0, xyz1, T_gt = input_dict['pcd0'], input_dict['pcd1'], input_dict['T_gt']
-      # xyz0_corr, xyz1_corr = self.find_corr(xyz0, xyz1, F0, F1, subsample_size=5000)
-      # T_est = te.est_quad_linear_robust(xyz0_corr, xyz1_corr)
-      #
-      # loss = corr_dist(T_est, T_gt, xyz0, xyz1, weight=None)
-      # loss_meter.update(loss)
-      #
-      # rte = np.linalg.norm(T_est[:3, 3] - T_gt[:3, 3])
-      # rte_meter.update(rte)
-      # rre = np.arccos((np.trace(T_est[:3, :3].t() @ T_gt[:3, :3]) - 1) / 2)
-      # if not np.isnan(rre):
-      #   rre_meter.update(rre)
-      #
-      # hit_ratio = self.evaluate_hit_ratio(
-      #     xyz0_corr, xyz1_corr, T_gt, thresh=self.config.hit_ratio_thresh)
-      # hit_ratio_meter.update(hit_ratio)
-      # feat_match_ratio.update(hit_ratio > 0.05)
-      # matching_timer.toc()
+      pos_ind = []
+      neg_ind = []
+      # pos_ind = [ind for ind in range(len(input_dict['pcd_match'])) if input_dict['pcd_match'][ind] == True]
+      for ind in range(len(input_dict['pcd_match'])):
+        if input_dict['pcd_match'][ind]:
+          pos_ind.append(ind)
+        else:
+          neg_ind.append(ind)
+      pos_loss, neg_loss = torch.tensor(0.), torch.tensor(0.)
+      if pos_ind:
+        pos_loss = ((F0[pos_ind] - F1[pos_ind]).pow(2).sum(1))
 
-      if input_dict['pcd_match']:
-        pos_loss = (F0 - F1).pow(2).sum(1)
-        loss += pos_loss.item()
+      if neg_ind:
+        neg_loss = (F.relu(self.neg_thresh -
+                           ((F0[neg_ind] - F1[neg_ind]).pow(2).sum(1) + 1e-4).sqrt()).pow(2))
 
-      else:
-        pos_loss_mean = 0
-        neg_loss = F.relu(self.neg_thresh -
-                          ((F0 - F1).pow(2).sum(1) + 1e-4).sqrt()).pow(2)
-        loss += neg_loss.item()
+      pos_loss_mean = pos_loss.mean()
+      neg_loss_mean = neg_loss.mean()
+      temp_loss = pos_loss_mean + self.neg_weight * neg_loss_mean
+
+      loss += temp_loss.item()
 
 
 
@@ -685,6 +1164,171 @@ class ContrastiveLossTrainer_MLP(AlignmentTrainer):
         'hit_ratio': hit_ratio_meter.avg
     }
 
+########################################################################################################################
+
+  def _valid_epoch_mlp(self):
+    # Change the network to evaluation mode
+    self.model.eval()
+    self.val_data_loader.dataset.reset_seed(0)
+    num_data = 0
+    hit_ratio_meter, feat_match_ratio, loss_meter, rte_meter, rre_meter = AverageMeter(
+    ), AverageMeter(), AverageMeter(), AverageMeter(), AverageMeter()
+    data_timer, feat_timer, matching_timer = Timer(), Timer(), Timer()
+    tot_num_data = len(self.val_data_loader.dataset)
+    if self.val_max_iter > 0:
+      tot_num_data = min(self.val_max_iter, tot_num_data)
+    data_loader_iter = self.val_data_loader.__iter__()
+    loss = 0
+    for batch_idx in range(tot_num_data):
+      data_timer.tic()
+      input_dict = data_loader_iter.next()
+      data_timer.toc()
+
+      # pairs consist of (xyz1 index, xyz0 index)
+      feat_timer.tic()
+
+      fcgf0 = input_dict['fcgf0']
+      fcgf1 = input_dict['fcgf1']
+      length0 = input_dict['length0']
+      length1 = input_dict['length1']
+      overlap = np.array(input_dict['overlap'])
+      overlap = torch.from_numpy(overlap).to(self.device)
+      fcgf0, fcgf1 = fcgf0.to(self.device), fcgf1.to(self.device)
+
+      F0 = self.model(fcgf0, length0)
+      F1 = self.model(fcgf1, length1)
+
+      feat_timer.toc()
+      pos_ind = []
+      neg_ind = []
+      # pos_ind = [ind for ind in range(len(input_dict['pcd_match'])) if input_dict['pcd_match'][ind] == True]
+      for ind in range(len(input_dict['pcd_match'])):
+        if input_dict['pcd_match'][ind]:
+          pos_ind.append(ind)
+        else:
+          neg_ind.append(ind)
+      pos_loss, neg_loss = torch.tensor(0.), torch.tensor(0.)
+      if pos_ind:
+        pos_loss = (F.relu(
+          ((F0[pos_ind] - F1[pos_ind]).pow(2).sum(1) + 1e-7).sqrt() - (1 - overlap[pos_ind])).pow(2))
+
+      if neg_ind:
+        neg_loss = (F.relu(self.neg_thresh -
+                           ((F0[neg_ind] - F1[neg_ind]).pow(2).sum(1) + 1e-7).sqrt()).pow(2))
+
+      pos_loss_mean = pos_loss.mean()
+      neg_loss_mean = neg_loss.mean()
+      temp_loss = pos_loss_mean + self.neg_weight * neg_loss_mean
+      loss += temp_loss.item()
+
+      num_data += 1
+      torch.cuda.empty_cache()
+
+      if batch_idx % 100 == 0 and batch_idx > 0:
+        logging.info(' '.join([
+          f"Validation iter {num_data} / {tot_num_data} : Data Loading Time: {data_timer.avg:.3f},",
+          f"Loss: {(loss / num_data):.3f},"
+        ]))
+        data_timer.reset()
+
+    logging.info(' '.join([
+      f"Final Loss: {(loss / num_data):.3f},"
+    ]))
+    return {
+      "final_loss": (loss / num_data),
+      "rre": rre_meter.avg,
+      "rte": rte_meter.avg,
+      'feat_match_ratio': feat_match_ratio.avg,
+      'hit_ratio': hit_ratio_meter.avg
+    }
+
+########################################################################################################################
+
+  def _valid_epoch_reg(self):
+    # Change the network to evaluation mode
+    self.model.eval()
+    self.val_data_loader.dataset.reset_seed(0)
+    num_data = 0
+    hit_ratio_meter, feat_match_ratio, loss_meter, rte_meter, rre_meter = AverageMeter(
+    ), AverageMeter(), AverageMeter(), AverageMeter(), AverageMeter()
+    data_timer, feat_timer, matching_timer = Timer(), Timer(), Timer()
+    tot_num_data = len(self.val_data_loader.dataset)
+    if self.val_max_iter > 0:
+      tot_num_data = min(self.val_max_iter, tot_num_data)
+    data_loader_iter = self.val_data_loader.__iter__()
+    loss = 0
+    for batch_idx in range(tot_num_data):
+      data_timer.tic()
+      input_dict = data_loader_iter.next()
+      data_timer.toc()
+
+      # pairs consist of (xyz1 index, xyz0 index)
+      feat_timer.tic()
+
+      fcgf0 = input_dict['fcgf0']
+      fcgf1 = input_dict['fcgf1']
+      length0 = input_dict['length0']
+      length1 = input_dict['length1']
+
+      fcgf0, fcgf1 = fcgf0.to(self.device), fcgf1.to(self.device)
+
+
+      F0, gp0, n0 = self.model(fcgf0, length0)
+      F1, gp1, n1 = self.model(fcgf1, length1)
+      n0 = torch.from_numpy(n0).to(self.device)
+      n1 = torch.from_numpy(n1).to(self.device)
+      gp_loss0 = torch.norm((gp0 - (n0 // 8)), dim=(1))
+      gp_loss0 = gp_loss0.mean()
+
+      gp_loss1 = torch.norm((gp1 - (n1 // 8)), dim=(1))
+      gp_loss1 = gp_loss1.mean()
+
+      gp_loss = gp_loss0 + gp_loss1
+
+      feat_timer.toc()
+      pos_ind = []
+      neg_ind = []
+      # pos_ind = [ind for ind in range(len(input_dict['pcd_match'])) if input_dict['pcd_match'][ind] == True]
+      for ind in range(len(input_dict['pcd_match'])):
+        if input_dict['pcd_match'][ind]:
+          pos_ind.append(ind)
+        else:
+          neg_ind.append(ind)
+      pos_loss, neg_loss = torch.tensor(0.), torch.tensor(0.)
+      if pos_ind:
+        pos_loss = ((F0[pos_ind] - F1[pos_ind]).pow(2).sum(1))
+
+      if neg_ind:
+        neg_loss = (F.relu(self.neg_thresh -
+                           ((F0[neg_ind] - F1[neg_ind]).pow(2).sum(1) + 1e-4).sqrt()).pow(2))
+
+      pos_loss_mean = pos_loss.mean()
+      neg_loss_mean = neg_loss.mean()
+      temp_loss = pos_loss_mean + self.neg_weight * neg_loss_mean + self.gp_weight * gp_loss
+      loss += temp_loss.item()
+
+      num_data += 1
+      torch.cuda.empty_cache()
+
+      if batch_idx % 100 == 0 and batch_idx > 0:
+        logging.info(' '.join([
+          f"Validation iter {num_data} / {tot_num_data} : Data Loading Time: {data_timer.avg:.3f},",
+          f"Loss: {(loss / num_data):.3f},"
+        ]))
+        data_timer.reset()
+
+    logging.info(' '.join([
+      f"Final Loss: {(loss / num_data):.3f},"
+    ]))
+    return {
+      "final_loss": (loss / num_data),
+      "rre": rre_meter.avg,
+      "rte": rte_meter.avg,
+      'feat_match_ratio': feat_match_ratio.avg,
+      'hit_ratio': hit_ratio_meter.avg
+    }
+
+########################################################################################################################
   def find_corr(self, xyz0, xyz1, F0, F1, subsample_size=-1):
     subsample = len(F0) > subsample_size
     if subsample_size > 0 and subsample:
@@ -851,6 +1495,243 @@ class HardestContrastiveLossTrainer(ContrastiveLossTrainer):
         data_meter.reset()
         total_timer.reset()
 #################################################################################################
+########################################################################################################################
+
+  def _train_epoch_mlp(self, epoch):
+    gc.collect()
+    self.model.train()
+    # Epoch starts from 1
+    total_loss = 0
+    total_num = 0.0
+
+    data_loader = self.data_loader
+    data_loader_iter = self.data_loader.__iter__()
+
+    iter_size = self.iter_size
+    start_iter = (epoch - 1) * (len(data_loader) // iter_size)
+
+    data_meter, model_meter, train_meter, data_timer, total_timer, model_timer, train_timer = AverageMeter(), AverageMeter(), AverageMeter(), Timer(), Timer(), Timer(), Timer()
+
+    # Main training
+
+    for curr_iter in range(len(data_loader) // iter_size):
+      self.optimizer.zero_grad()
+      batch_pos_loss, batch_neg_loss, batch_loss = 0, 0, 0
+
+      data_time = 0
+      model_time = 0
+      train_time = 0
+      total_timer.tic()
+      train_timer.tic()
+      for iter_idx in range(iter_size):
+        # Caffe iter size
+        data_timer.tic()
+        input_dict = data_loader_iter.next()
+        data_time += data_timer.toc(average=False)
+
+        model_timer.tic()
+        fcgf = input_dict['fcgf']
+
+        length = input_dict['length']
+        overlap = input_dict['overlap']
+        pcd_match = input_dict['pcd_match']
+
+        overlap = torch.from_numpy(overlap).to(self.device)
+        fcgf = fcgf.to(self.device)
+
+        pcd_match = torch.from_numpy(pcd_match).to(self.device)
+        F0, gp0, n0 = self.model(fcgf, length)
+        n0 = torch.from_numpy(n0).to(self.device)
+
+        gp_loss0 = torch.norm((gp0 - (n0 // 8)), dim=(1))
+
+        gp_loss0 = gp_loss0.mean()
+
+        gp_loss = gp_loss0
+
+        if F0.shape[0] ==2 :
+          neg_loss = torch.tensor(0.)
+          pos_D = pdist(F0[0:1], F0[1:], dist_type='L2')
+          pos_loss = F.relu((pos_D-(1-overlap))).pow(2)
+          # pos_loss = pos_D.pow(2)
+        else :
+          pos_D = pdist(F0[0:1], F0[1:2], dist_type='L2')
+          neg_D = pdist(F0[0:1], F0[2:], dist_type='L2')
+          Dmin, Dind = neg_D.min(1)
+          pos_loss = F.relu((pos_D - (1 - overlap))).pow(2)
+          # pos_loss = pos_D.pow(2)
+          neg_loss = F.relu(self.neg_thresh - Dmin).pow(2)
+
+        pos_loss_mean = pos_loss.mean()
+        neg_loss_mean = neg_loss.mean()
+
+        ## hardest mining (batch 10)을 위해 삭제
+        # fcgf = input_dict['fcgf']
+        # length = input_dict['length']
+        # overlap = input_dict['overlap']
+        # pcd_match = input_dict['pcd_match']
+        #
+        #
+        # pos_pcd_match = pcd_match.copy()
+        # neg_pcd_match = pcd_match.copy()
+        # neg_pcd_match = np.logical_not(neg_pcd_match)
+        #
+        # for i in range(len(pcd_match)) :
+        #   pos_pcd_match[i][i] = False
+        #   neg_pcd_match[i][i] = False
+        #
+        #
+        # overlap = torch.from_numpy(overlap).to(self.device)
+        # fcgf = fcgf.to(self.device)
+        #
+        # pos_pcd_match = torch.from_numpy(pos_pcd_match).to(self.device)
+        # neg_pcd_match = torch.from_numpy(neg_pcd_match).to(self.device)
+        # F0 = self.model(fcgf, length)
+        # D = pdist(F0[0], F0[1:], dist_type='L2')
+        #
+        # mask = (torch.ones((len(pcd_match), len(pcd_match))) * 1e+7).to(self.device)
+        # pos_mask = torch.logical_not(torch.triu(neg_pcd_match)) * mask
+        #
+        # pos_D = D[torch.triu(pos_pcd_match)]
+        # pos_overlap = overlap[torch.triu(pos_pcd_match)]
+        #
+        # neg_D = D * neg_pcd_match + pos_mask
+        #
+        # Dmin, Dind = neg_D.min(1)
+        # Dmin = Dmin[torch.where(Dmin != 1e+7)[0]]
+        #
+        # pos_loss, neg_loss = torch.tensor(0.), torch.tensor(0.)
+        # if pos_pcd_match.any() :
+        #   pos_loss = F.relu((pos_D-(1-pos_overlap))).pow(2)
+        #
+        # if neg_pcd_match.any() :
+        #   neg_loss = F.relu(self.neg_thresh - Dmin).pow(2)
+        #
+        # pos_loss_mean = pos_loss.mean()
+        # neg_loss_mean = neg_loss.mean()
+        ## hardest mining (batch 10)을 위해 삭제
+
+
+        loss = 0.2*pos_loss_mean + self.neg_weight * neg_loss_mean + self.gp_weight * gp_loss
+
+        loss.backward(
+        )  # To accumulate gradient, zero gradients only at the beginning of iter_size
+
+        batch_loss += loss.item()
+        batch_pos_loss += pos_loss_mean.item()
+        batch_neg_loss += neg_loss_mean.item()
+
+        train_time += train_timer.toc(average=False)
+      self.optimizer.step()
+
+      torch.cuda.empty_cache()
+
+      total_timer.toc()
+      data_meter.update(data_time)
+      model_meter.update(model_time)
+      train_meter.update(train_time)
+      # Print logs
+      if curr_iter % self.config.stat_freq == 0:
+        self.writer.add_scalar('train/loss', batch_loss, start_iter + curr_iter)
+        self.writer.add_scalar('train/pos_loss', batch_pos_loss, start_iter + curr_iter)
+        self.writer.add_scalar('train/neg_loss', batch_neg_loss, start_iter + curr_iter)
+
+        logging.info(
+          "Train Epoch: {} [{}/{}], Current Loss: {:.3e} Pos: {:.3f} Neg: {:.3f}"
+          .format(epoch, curr_iter,
+                  len(self.data_loader) //
+                  iter_size, batch_loss, batch_pos_loss, batch_neg_loss) +
+          "\tData time: {:.4f}, Train time: {:.4f}, Iter time: {:.4f}, Model time: {:.4f}, Trainer time: {:.4f}".format(
+            data_meter.avg, total_timer.avg - data_meter.avg, total_timer.avg, model_meter.avg, train_meter.avg))
+        data_meter.reset()
+        total_timer.reset()
+
+########################################################################################################################
+
+  def _valid_epoch_mlp(self):
+    # Change the network to evaluation mode
+    self.model.eval()
+    self.val_data_loader.dataset.reset_seed(0)
+    num_data = 0
+    hit_ratio_meter, feat_match_ratio, loss_meter, rte_meter, rre_meter = AverageMeter(
+    ), AverageMeter(), AverageMeter(), AverageMeter(), AverageMeter()
+    data_timer, feat_timer, matching_timer = Timer(), Timer(), Timer()
+    tot_num_data = len(self.val_data_loader.dataset)
+    if self.val_max_iter > 0:
+      tot_num_data = min(self.val_max_iter, tot_num_data)
+    data_loader_iter = self.val_data_loader.__iter__()
+    loss = 0
+
+    for batch_idx in range(tot_num_data):
+      data_timer.tic()
+      input_dict = data_loader_iter.next()
+      data_timer.toc()
+
+      # pairs consist of (xyz1 index, xyz0 index)
+      feat_timer.tic()
+
+      fcgf = input_dict['fcgf']
+      length = input_dict['length']
+      overlap = input_dict['overlap']
+      pcd_match = input_dict['pcd_match']
+
+      overlap = torch.from_numpy(overlap).to(self.device)
+      fcgf = fcgf.to(self.device)
+      pcd_match = torch.from_numpy(pcd_match).to(self.device)
+      # F0 = self.model(fcgf, length)
+      ## regulariazation)
+      F0, gp0, n0 = self.model(fcgf, length)
+      n0 = torch.from_numpy(n0).to(self.device)
+
+      gp_loss0 = torch.norm((gp0 - (n0 // 8)), dim=(1))
+
+      gp_loss0 = gp_loss0.mean()
+
+      gp_loss = gp_loss0
+      if F0.shape[0] == 2:
+        neg_loss = torch.tensor(0.)
+        pos_D = pdist(F0[0:1], F0[1:], dist_type='L2')
+        pos_loss = F.relu((pos_D - (1 - overlap))).pow(2)
+        # pos_loss = pos_D.pow(2)
+      else:
+        pos_D = pdist(F0[0:1], F0[1:2], dist_type='L2')
+        neg_D = pdist(F0[0:1], F0[2:], dist_type='L2')
+        Dmin, Dind = neg_D.min(1)
+        pos_loss = F.relu((pos_D - (1 - overlap))).pow(2)
+        # pos_loss = pos_D.pow(2)
+        neg_loss = F.relu(self.neg_thresh - Dmin).pow(2)
+
+      pos_loss_mean = pos_loss.mean()
+      neg_loss_mean = neg_loss.mean()
+
+      temp_loss = pos_loss_mean + self.neg_weight * neg_loss_mean+ self.gp_weight * gp_loss
+      loss += temp_loss.item()
+
+      num_data += 1
+      torch.cuda.empty_cache()
+
+      if batch_idx % 100 == 0 and batch_idx > 0:
+        logging.info(' '.join([
+          f"Validation iter {num_data} / {tot_num_data} : Data Loading Time: {data_timer.avg:.3f},",
+          f"Loss: {(loss / num_data):.3f},"
+        ]))
+        data_timer.reset()
+
+    logging.info(' '.join([
+      f"Final Loss: {(loss / num_data):.3f},"
+    ]))
+    return {
+      "final_loss": (loss / num_data),
+      "rre": rre_meter.avg,
+      "rte": rte_meter.avg,
+      'feat_match_ratio': feat_match_ratio.avg,
+      'hit_ratio': hit_ratio_meter.avg
+    }
+
+########################################################################################################################
+
+
+
 
 class HardestContrastiveLossTrainer_MLP(ContrastiveLossTrainer):
 

@@ -22,7 +22,15 @@ trainer_arg.add_argument('--trainer', type=str, default='HardestContrastiveLossT
 trainer_arg.add_argument('--save_freq_epoch', type=int, default=1)
 trainer_arg.add_argument('--batch_size', type=int, default=1)
 trainer_arg.add_argument('--val_batch_size', type=int, default=1)
-trainer_arg.add_argument('--freeze', type=str, default='False')
+trainer_arg.add_argument('--freeze', type=str2bool, default=False)
+trainer_arg.add_argument('--fcgf_extract', type=str2bool, default=False)
+trainer_arg.add_argument('--load_fcgf', type=str2bool, default=False)
+trainer_arg.add_argument('--train_hardest', type=str2bool, default=False)
+trainer_arg.add_argument('--multi_feature', type=str2bool, default=False)
+trainer_arg.add_argument('--gp_reg', type=str2bool, default=False)
+trainer_arg.add_argument('--target_path', type=str, default='./feature_train/')
+trainer_arg.add_argument('--checkpoint_name', type=str, default='checkpoint_128_th1.4')
+
 
 # Hard negative mining
 trainer_arg.add_argument('--use_hard_negative', type=str2bool, default=True)
@@ -32,9 +40,12 @@ trainer_arg.add_argument('--num_pos_per_batch', type=int, default=1024)
 trainer_arg.add_argument('--num_hn_samples_per_batch', type=int, default=256)
 
 # Metric learning loss
-trainer_arg.add_argument('--neg_thresh', type=float, default=1.4)
+trainer_arg.add_argument('--neg_thresh', type=float, default=2.0)
+# trainer_arg.add_argument('--neg_thresh', type=float, default=2.0)
 trainer_arg.add_argument('--pos_thresh', type=float, default=0.1)
 trainer_arg.add_argument('--neg_weight', type=float, default=1)
+# trainer_arg.add_argument('--neg_weight', type=float, default=0.2)
+trainer_arg.add_argument('--gp_weight', type=float, default=1e-4)
 
 # Data augmentation
 trainer_arg.add_argument('--use_random_scale', type=str2bool, default=False)
@@ -48,7 +59,7 @@ trainer_arg.add_argument('--train_phase', type=str, default="train")
 trainer_arg.add_argument('--val_phase', type=str, default="val")
 trainer_arg.add_argument('--test_phase', type=str, default="test")
 
-trainer_arg.add_argument('--stat_freq', type=int, default=40)
+trainer_arg.add_argument('--stat_freq', type=int, default=1)
 trainer_arg.add_argument('--test_valid', type=str2bool, default=True)
 trainer_arg.add_argument('--val_max_iter', type=int, default=400)
 trainer_arg.add_argument('--val_epoch_freq', type=int, default=1)
@@ -64,7 +75,7 @@ trainer_arg.add_argument('--triplet_num_rand', type=int, default=1024)
 
 # dNetwork specific configurations
 net_arg = add_argument_group('Network')
-net_arg.add_argument('--model', type=str, default='ResUNetBN2C')
+net_arg.add_argument('--model', type=str, default='ResUNetMLP2')
 net_arg.add_argument('--model_n_out', type=int, default=32, help='Feature dimension')
 net_arg.add_argument('--conv1_kernel_size', type=int, default=7)
 net_arg.add_argument('--normalize_feature', type=str2bool, default=True)
@@ -75,7 +86,7 @@ net_arg.add_argument('--best_val_metric', type=str, default='final_loss')
 opt_arg = add_argument_group('Optimizer')
 opt_arg.add_argument('--optimizer', type=str, default='SGD')
 opt_arg.add_argument('--max_epoch', type=int, default=100)
-opt_arg.add_argument('--lr', type=float, default=1e-3)
+opt_arg.add_argument('--lr', type=float, default=1e-4)
 opt_arg.add_argument('--momentum', type=float, default=0.8)
 opt_arg.add_argument('--sgd_momentum', type=float, default=0.9)
 opt_arg.add_argument('--sgd_dampening', type=float, default=0.1)

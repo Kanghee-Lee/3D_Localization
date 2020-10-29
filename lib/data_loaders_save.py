@@ -23,83 +23,8 @@ kitti_cache = {}
 kitti_icp_cache = {}
 
 
-
-
-def collate_pair_hardest_multi(list_data):
-  fcgf, length, pcd_match, overlap = list(
-    zip(*list_data))
-  print(len(fcgf[0]))
-  print(len(length[0]))
-  assert 0
-  fcgf_batch = []
-  xyz_batch0, xyz_batch1 = [], []
-  matching_inds_batch, trans_batch, len_batch = [], [], []
-
-  batch_id = 0
-  curr_start_inds = np.zeros((1, 2))
-
-  def to_tensor(x):
-    if isinstance(x, torch.Tensor):
-      return x
-    elif isinstance(x, np.ndarray):
-      return torch.from_numpy(x)
-    else:
-      raise ValueError(f'Can not convert to torch tensor, {x}')
-
-  for batch_id, _ in enumerate(fcgf[0]):
-    N = fcgf[0][batch_id].shape[0]
-    len_batch.append(N)
-    fcgf_batch.append(to_tensor(fcgf[0][batch_id]))
-    # Move the head
-    curr_start_inds[0, 0] += N
-
-  fcgf_batch = torch.cat(fcgf_batch, 0).float()
-  print(fcgf_batch)
-  return {
-    'fcgf': fcgf_batch,
-    'length': len_batch,
-    'pcd_match': pcd_match[0],
-    'overlap': overlap[0]
-  }
-
-
-def collate_pair_hardest(list_data):
-  fcgf, length, pcd_match, overlap = list(
-    zip(*list_data))
-
-  fcgf_batch = []
-  xyz_batch0, xyz_batch1 = [], []
-  matching_inds_batch, trans_batch, len_batch = [], [], []
-
-  batch_id = 0
-  curr_start_inds = np.zeros((1, 2))
-
-  def to_tensor(x):
-    if isinstance(x, torch.Tensor):
-      return x
-    elif isinstance(x, np.ndarray):
-      return torch.from_numpy(x)
-    else:
-      raise ValueError(f'Can not convert to torch tensor, {x}')
-
-  for batch_id, _ in enumerate(fcgf[0]):
-    N = fcgf[0][batch_id].shape[0]
-    len_batch.append(N)
-    fcgf_batch.append(to_tensor(fcgf[0][batch_id]))
-    # Move the head
-    curr_start_inds[0, 0] += N
-
-  fcgf_batch = torch.cat(fcgf_batch, 0).float()
-  print(fcgf_batch)
-  return {
-    'fcgf': fcgf_batch,
-    'length': len_batch,
-    'pcd_match': pcd_match[0],
-    'overlap' : overlap[0]
-  }
-
 def collate_pair_fcgf(list_data):
-  file0, file1, fcgf0, fcgf1, length0, length1, pcd_match, overlap = list(
+  file0, file1, fcgf0, fcgf1, length0, length1, pcd_match = list(
     zip(*list_data))
   # print('data_loader.py - pcd_match : ', pcd_match)
   # print(len(pcd_match))
@@ -158,13 +83,15 @@ def collate_pair_fcgf(list_data):
     'fcgf1': fcgf_batch1,
     'length0': len_batch0,
     'length1': len_batch1,
-    'pcd_match': pcd_match,
-    'overlap' : overlap
+    'pcd_match': pcd_match
   }
 
 
 # 수정
 def collate_pair_fn(list_data):
+
+
+
   file0, file1, xyz0, xyz1, coords0, coords1, feats0, feats1, trans, pcd_match = list(
       zip(*list_data))
   # print('data_loader.py - pcd_match : ', pcd_match)
@@ -260,18 +187,13 @@ class PairDataset(torch.utils.data.Dataset):
                manual_seed=False,
                config=None):
     self.fcgf_extract = config.fcgf_extract
-    self.train_hardest = config.train_hardest
-    self.multi_feature = config.multi_feature
     self.load_fcgf = config.load_fcgf
     self.target_path = config.target_path
 
 
     self.phase = phase
     self.files = []
-    self.files_keys = []
-    self.files_list = {}
-    self.neg_files = {}
-    self.pos_files = {}
+    self.pos_files = []
     self.data_objects = []
     self.transform = transform
     self.voxel_size = config.voxel_size
@@ -298,12 +220,7 @@ class PairDataset(torch.utils.data.Dataset):
     return pts
 
   def __len__(self):
-    if self.train_hardest :
-      # return len(self.files_keys)
-      ## hardest mining (10개 batch)
-      return len(self.pos_files)
     return len(self.files)
-
 
 
 class ThreeDMatchTestDataset(PairDataset):
@@ -389,58 +306,6 @@ class IndoorPairDataset(PairDataset):
           self.files.append(fn)
           print(fn)
           c+=1
-    elif self.train_hardest :
-      self.files={}
-      for name in subset_names:
-        fname = name + "*.npz"
-        pos_fname = name + "*%.2f.txt" % self.OVERLAP_RATIO
-        fnames_txt = glob.glob(root + "/" + fname)
-        pos_fnames_txt = glob.glob(root + "/" + pos_fname)
-        # print('data_loaders.py - fnames_txt : ', fnames_txt)
-        assert len(fnames_txt) > 0, f"Make sure that the path {root} has data {fname}"
-        for fname_txt in fnames_txt:
-          fn = fname_txt.split(root+'/')[1]
-          fn_key = fn.rsplit('_', 1)[0]
-          if fn_key not in files_dict.keys() :
-            files_dict[fn_key] = [fn]
-          else :
-            files_dict[fn_key].append(fn)
-
-
-        for pos_fname_txt in pos_fnames_txt:
-          pos_fn = pos_fname_txt.split(root + '/')[1]
-          pos_fn_key = pos_fn.rsplit('-', 1)[0]
-          with open(pos_fname_txt) as f:
-            content = f.readlines()
-          pos_fnames = [x.strip().split() for x in content]
-          for pos_fname in pos_fnames:
-            self.pos_files[pos_fname[0], pos_fname[1]] = [pos_fn_key, pos_fname[2]]
-            # self.pos_files.append([pos_fname[0], pos_fname[1]])
-
-      # self.files = files_dict
-      self.pos_files_list = list(self.pos_files.keys())
-      self.files_keys = list(files_dict.keys())
-      self.files_list = files_dict
-      # files_list=list(files_dict.values())
-      for key, files in list(files_dict.items()) :
-        # print(key, files)
-        for i in range(len(files)) :
-          for j in range(i + 1, len(files)) :
-
-            if (files[i], files[j]) in self.pos_files.keys():
-              ismatch_pcd = True
-              overlap=self.pos_files[files[i], files[j]][-1]
-            elif (files[j], files[i]) in self.pos_files.keys():
-              ismatch_pcd = True
-              overlap=self.pos_files[files[j], files[i]][-1]
-            else :
-              ismatch_pcd = False
-              overlap=-1
-            self.files[files[i], files[j]] = [ismatch_pcd, overlap]
-            self.files[files[j], files[i]] = [ismatch_pcd, overlap]
-            #temp_pairs.append([files[i], files[j], ismatch_pcd, overlap])
-        # self.files[key] = temp_pairs
-
     else :
       for name in subset_names:
         fname = name + "*.npz"
@@ -462,8 +327,7 @@ class IndoorPairDataset(PairDataset):
             content = f.readlines()
           pos_fnames = [x.strip().split() for x in content]
           for pos_fname in pos_fnames:
-            self.pos_files[pos_fname[0], pos_fname[1]] = pos_fname[2]
-            # self.pos_files.append([pos_fname[0], pos_fname[1]])
+            self.pos_files.append([pos_fname[0], pos_fname[1]])
 
 
       # ismatch_pcd = False
@@ -471,19 +335,11 @@ class IndoorPairDataset(PairDataset):
       for files in files_list :
         for i in range(len(files)) :
           for j in range(i + 1, len(files)) :
-            if (files[i], files[j]) in self.pos_files.keys() :
+            if [files[i], files[j]] in self.pos_files :
               ismatch_pcd = True
-              overlap=self.pos_files[files[i], files[j]]
-            elif (files[j], files[i]) in self.pos_files.keys():
-              ismatch_pcd = True
-              overlap=self.pos_files[files[j], files[i]]
             else :
               ismatch_pcd = False
-              overlap=-1
-
-            self.files.append([files[i], files[j], ismatch_pcd, overlap])
-
-
+            self.files.append([files[i], files[j], ismatch_pcd])
       # print('data_loaders.py - files : ', self.files)
 
   # 수정
@@ -533,145 +389,20 @@ class IndoorPairDataset(PairDataset):
       if self.transform:
         coords0, feats0 = self.transform(coords0, feats0)
       return (self.files[idx], self.files[idx], xyz0, xyz0, coords0, coords0, feats0, feats0, trans, True)
-    elif self.train_hardest and self.multi_feature:
-      # files = np.array(self.files[self.files_keys[idx]])
-      file0, file1=self.pos_files_list[idx]
-      overlap = np.array(self.files[file0, file1][1]).astype(float)
-      pos_key = self.pos_files[file0, file1][0]
 
-      files = np.array(self.files_list[pos_key])
-
-      N_files = len(files)
-      batch_num = 10
-      if N_files < batch_num :
-        batch_files = files
-      else :
-        batch_sel = np.random.choice(N_files, batch_num, replace=False)
-        batch_files = files[batch_sel]
-
-      if file0 in batch_files :
-        batch_files = np.delete(batch_files, np.where(batch_files==file0))
-
-      pcd_match=np.empty(len(batch_files), dtype=bool)
-
-      for i in range(len(batch_files)) :
-        pcd_match[i] = self.files[file0, batch_files[i]][0]
-      # print(file0)
-      # print(pcd_match)
-      # print(overlap)
-      batch_files = batch_files[np.logical_not(pcd_match)]
-      pcd_match = pcd_match[np.logical_not(pcd_match)]
-      batch_files = np.insert(batch_files, 0, file1)
-      batch_files = np.insert(batch_files, 0, file0)
-      pcd_match = np.insert(pcd_match, 0, True)
-      pcd_match = np.insert(pcd_match, 0, False)
-
-      fcgf=[]
-      length=[]
-
-      for file in batch_files :
-        data = np.load(os.path.join(self.target_path, file))
-        fcgf.append([data['fcgf0'], data['fcgf1'], data['fcgf2'], data['fcgf3']])
-        length.append(data['length'])
-      return (fcgf, length, pcd_match, overlap)
-    elif self.train_hardest :
-      # files = np.array(self.files[self.files_keys[idx]])
-      file0, file1=self.pos_files_list[idx]
-      overlap = np.array(self.files[file0, file1][1]).astype(float)
-      pos_key = self.pos_files[file0, file1][0]
-
-      files = np.array(self.files_list[pos_key])
-
-      N_files = len(files)
-      batch_num = 10
-      if N_files < batch_num :
-        batch_files = files
-      else :
-        batch_sel = np.random.choice(N_files, batch_num, replace=False)
-        batch_files = files[batch_sel]
-
-      if file0 in batch_files :
-        batch_files = np.delete(batch_files, np.where(batch_files==file0))
-
-      pcd_match=np.empty(len(batch_files), dtype=bool)
-
-      for i in range(len(batch_files)) :
-        pcd_match[i] = self.files[file0, batch_files[i]][0]
-      # print(file0)
-      # print(pcd_match)
-      # print(overlap)
-      batch_files = batch_files[np.logical_not(pcd_match)]
-      pcd_match = pcd_match[np.logical_not(pcd_match)]
-      batch_files = np.insert(batch_files, 0, file1)
-      batch_files = np.insert(batch_files, 0, file0)
-      pcd_match = np.insert(pcd_match, 0, True)
-      pcd_match = np.insert(pcd_match, 0, False)
-
-      fcgf=[]
-      length=[]
-
-      for file in batch_files :
-
-        data = np.load(os.path.join(self.target_path, file))
-        fcgf.append(data['fcgf'])
-        length.append(data['length'])
-      return (fcgf, length, pcd_match, overlap)
-
-      ## hardest negative (batch 10을 위해 삭제)
-      # files = np.array(self.files_list[self.files_keys[idx]])
-      # N_files = len(files)
-      #
-      # batch_num=N_files+1
-      # if N_files < batch_num :
-      #   batch_files = files
-      # else :
-      #   batch_sel = np.random.choice(N_files, batch_num, replace=False)
-      #   batch_files = files[batch_sel]
-      #
-      # pcd_match=np.empty((len(batch_files), len(batch_files)), dtype=bool)
-      # overlap = np.empty((len(batch_files), len(batch_files)), dtype=float)
-      # for i in range(len(batch_files)) :
-      #   for j in range(i+1, len(batch_files)) :
-      #     # match = self.files[]
-      #     pcd_match[i][j] = self.files[batch_files[i], batch_files[j]][0]
-      #     pcd_match[j][i] = self.files[batch_files[i], batch_files[j]][0]
-      #     overlap[i][j] = self.files[batch_files[i], batch_files[j]][1]
-      #     overlap[j][i] = self.files[batch_files[i], batch_files[j]][1]
-      #
-      #
-      # # print(pcd_match)
-      # # print(overlap)
-      # # print(batch_files)
-      # fcgf=[]
-      # length=[]
-      # for file in batch_files :
-      #   data = np.load(os.path.join(self.target_path, file))
-      #   fcgf.append(data['fcgf'])
-      #   length.append(data['length'])
-      # # print(len(fcgf))
-      # # print(len(length))
-      # # print(pcd_match.shape)
-      # # print(overlap.shape)
-      # return (fcgf, length, pcd_match, overlap)
-      ## hardest negative (batch 10을 위해 삭제)
     elif self.load_fcgf :
       file0 = os.path.join(self.target_path, self.files[idx][0])
       file1 = os.path.join(self.target_path, self.files[idx][1])
 
 
       pcd_match = self.files[idx][2]
-      overlap = float(self.files[idx][3])
-
       data0 = np.load(file0)
       data1 = np.load(file1)
-      #--잠깐수정
-      # fcgf0 = data0['feature']
-      # fcgf1 = data1['feature']
       fcgf0 = data0['fcgf']
       fcgf1 = data1['fcgf']
       length0 = data0['length']
       length1 = data0['length']
-      return (self.files[idx][0], self.files[idx][1], fcgf0, fcgf1, length0, length1, pcd_match, overlap)
+      return (self.files[idx][0], self.files[idx][1], fcgf0, fcgf1, length0, length1, pcd_match)
     else :
       file0 = os.path.join(self.root, self.files[idx][0])
       # print('data_loaders.py - file0 : ', file0)
@@ -1097,9 +828,7 @@ class KITTINMPairDataset(KITTIPairDataset):
 class ThreeDMatchPairDataset(IndoorPairDataset):
   OVERLAP_RATIO = 0.3
   DATA_FILES = {
-      # test수정
       'train': './config/train_3dmatch.txt',
-      # 'train': './config/test_3dmatch.txt',
       'val': './config/val_3dmatch.txt',
       'test': './config/test_3dmatch.txt'
   }
@@ -1110,7 +839,6 @@ dataset_str_mapping = {d.__name__: d for d in ALL_DATASETS}
 
 
 def make_data_loader(config, phase, batch_size, num_threads=0, shuffle=None):
-
   assert phase in ['train', 'trainval', 'val', 'test']
   if shuffle is None:
     shuffle = phase != 'test'
@@ -1128,37 +856,14 @@ def make_data_loader(config, phase, batch_size, num_threads=0, shuffle=None):
     use_random_rotation = config.use_random_rotation
     use_random_scale = config.use_random_scale
     transforms += [t.Jitter()]
+
   dset = Dataset(
       phase,
       transform=t.Compose(transforms),
       random_scale=use_random_scale,
       random_rotation=use_random_rotation,
       config=config)
-  if config.train_hardest and config.multi_feature :
-
-    loader = torch.utils.data.DataLoader(
-      dset,
-      batch_size=batch_size,
-      shuffle=shuffle,
-      num_workers=num_threads,
-      collate_fn=collate_pair_hardest_multi,
-      pin_memory=False,
-      drop_last=True)
-
-    return loader
-  elif config.train_hardest :
-
-    loader = torch.utils.data.DataLoader(
-      dset,
-      batch_size=batch_size,
-      shuffle=shuffle,
-      num_workers=num_threads,
-      collate_fn=collate_pair_hardest,
-      pin_memory=False,
-      drop_last=True)
-
-    return loader
-  elif config.load_fcgf :
+  if config.load_fcgf :
     loader = torch.utils.data.DataLoader(
       dset,
       batch_size=batch_size,

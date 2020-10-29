@@ -40,35 +40,65 @@ def get_trainer(trainer):
 
 
 def main(config, resume=False):
-  train_loader = make_data_loader(
+
+  if config.fcgf_extract :
+    assert config.batch_size == 1, 'batch size should be 1'
+    assert config.model == 'ResUNetBN2C_extract', 'Inappropriate model for fcgf extract'
+    train_loader = make_data_loader(
       config,
       config.train_phase,
       config.batch_size,
       num_threads=config.train_num_thread)
 
-  if config.test_valid:
     val_loader = make_data_loader(
-        config,
-        config.val_phase,
-        config.val_batch_size,
-        num_threads=config.val_num_thread)
-  else:
-    val_loader = None
+      config,
+      config.val_phase,
+      config.val_batch_size,
+      num_threads=config.val_num_thread)
 
-  Trainer = get_trainer(config.trainer)
-  if config.freeze :
+    Trainer = get_trainer(config.trainer)
     trainer = Trainer(
-        config=config,
-        data_loader=train_loader,
-        val_data_loader=val_loader,
-        freeze=True)
+      config=config,
+      data_loader=train_loader,
+      val_data_loader=val_loader,
+      freeze=config.freeze)
+    trainer._extract()
+
   else :
-    trainer = Trainer(
-        config=config,
-        data_loader=train_loader,
-        val_data_loader=val_loader,
-        freeze=False)
-  trainer.train()
+    train_loader = make_data_loader(
+        config,
+        config.train_phase,
+        config.batch_size,
+        num_threads=config.train_num_thread)
+
+    if config.test_valid:
+      val_loader = make_data_loader(
+          config,
+          config.val_phase,
+          config.val_batch_size,
+          num_threads=config.val_num_thread)
+    else:
+      val_loader = None
+
+    Trainer = get_trainer(config.trainer)
+    if config.freeze :
+      trainer = Trainer(
+          config=config,
+          data_loader=train_loader,
+          val_data_loader=val_loader,
+          freeze=True)
+    else :
+      trainer = Trainer(
+          config=config,
+          data_loader=train_loader,
+          val_data_loader=val_loader,
+          freeze=False)
+    if config.gp_reg :
+      trainer.train_reg()
+    elif config.load_fcgf :
+      trainer.train_mlp()
+    else :
+      trainer.train()
   #
   # if config.freeze :
   #     trainer.train(freeze=True)
@@ -84,7 +114,7 @@ if __name__ == "__main__":
   print(torch.cuda.is_available())
   print('1'*50)
 
-
+  print(torch.__version__)
 
 
   logger = logging.getLogger()
@@ -96,7 +126,7 @@ if __name__ == "__main__":
     for k in dconfig:
       if k not in ['resume_dir'] and k in resume_config:
         dconfig[k] = resume_config[k]
-    dconfig['resume'] = resume_config['out_dir'] + '/checkpoint.pth'
+    dconfig['resume'] = resume_config['out_dir'] + '/checkpoint_32_att_8_1.pth'
 
   logging.info('===> Configurations')
   for k in dconfig:

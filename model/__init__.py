@@ -6,7 +6,7 @@ MODELS = []
 
 
 def add_models(module):
-  MODELS.extend([getattr(module, a) for a in dir(module) if 'Net' in a or 'MLP' in a])
+  MODELS.extend([getattr(module, a) for a in dir(module) if 'Net' in a or 'FCGF' in a or 'MLP' in a])
 
 
 add_models(simpleunets)
@@ -26,5 +26,6 @@ def load_model(name):
       logging.info('\t* {}'.format(model.__name__))
     return None
   NetClass = mdict[name]
-
+  print('MODELS : ', MODELS)
+  print('Choosed model : ', NetClass)
   return NetClass
